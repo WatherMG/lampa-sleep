@@ -129,12 +129,26 @@
   }
 
   SSAPClient.prototype.clientKey = function () {
-    var key = storageGet(KEY_CLIENT, '');
-    return typeof key === 'string' ? key : '';
+    // Keep the pairing credential outside Lampa.Storage to avoid application-level
+    // sync/export mechanisms. It remains local to this web app origin.
+    try {
+      var key = window.localStorage ? window.localStorage.getItem(KEY_CLIENT) : '';
+      return typeof key === 'string' ? key : '';
+    } catch (e) {
+      return '';
+    }
+  };
+
+  SSAPClient.prototype.saveClientKey = function (key) {
+    try {
+      if (window.localStorage) window.localStorage.setItem(KEY_CLIENT, key);
+    } catch (e) {}
   };
 
   SSAPClient.prototype.forget = function () {
-    storageSet(KEY_CLIENT, '');
+    try {
+      if (window.localStorage) window.localStorage.removeItem(KEY_CLIENT);
+    } catch (e) {}
     this.close();
   };
 
@@ -218,7 +232,7 @@
 
       if (msg.type === 'registered' && msg.id === 'register_0') {
         var newKey = msg.payload && msg.payload['client-key'];
-        if (typeof newKey === 'string' && newKey.length >= 8) storageSet(KEY_CLIENT, newKey);
+        if (typeof newKey === 'string' && newKey.length >= 8) self.saveClientKey(newKey);
         self.registered = true;
         finish(null);
         return;
