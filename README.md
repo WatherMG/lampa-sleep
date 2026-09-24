@@ -46,7 +46,7 @@ The plugin:
 - never uses SSH;
 - never uses private `luna://com.webos.service.tvpower` power calls;
 - never copies LG test signatures or a third-party signed SSAP manifest;
-- never sends the SSAP client key outside Lampa storage;
+- stores the SSAP client key only in this app origin's `window.localStorage`, not in `Lampa.Storage`;
 - never prints the client key in diagnostic logs;
 - accepts only `localhost`, loopback IPv4 and RFC1918 private IPv4 TV targets;
 - requests only `CONTROL_POWER`, `CONTROL_TV_SCREEN`, and `READ_POWER_STATE`;
@@ -176,7 +176,7 @@ Do this in order:
 3. Test a 15-minute hard/soft timer with a temporary shorter value through DevTools if desired.
 4. Enable TV control and try `127.0.0.1`.
 5. Run `LampaSleep.pair()`; record whether LG shows a pairing prompt.
-6. If loopback fails, set the TV's private LAN IP and retry.
+6. If loopback fails, set the TV's private LAN IP and retry. Port 3000 uses plain local WebSocket (`ws://`), so use this fallback only on a trusted home LAN; loopback is preferable.
 7. Run `getPowerState`.
 8. Run `screenOff`, wait several seconds, then restore with the remote or `screenOn`.
 9. Only after Screen Off succeeds, test `powerOff`.
