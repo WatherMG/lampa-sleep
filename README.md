@@ -2,7 +2,7 @@
 
 Safety-first sleep timer and binge-control plugin for **Lampa**, designed first for LG webOS.
 
-Current version: **0.1.0-alpha**.
+Current version: **0.1.1-alpha**.
 
 > Hardware status: timer/player integration is covered by automated tests. LG SSAP commands are based on the paired local-control protocol, but same-TV loopback/LAN operation still requires physical testing on an LG TV before this is called production-ready.
 
@@ -17,6 +17,8 @@ https://wathermg.github.io/lampa-sleep/sleep.js
 Lampa → Settings → Extensions → Add plugin → paste the URL.
 
 The plugin adds a **Sleep** button to the stock Lampa player panel and a separate **Lampa Sleep** settings section.
+
+The settings page also contains **Диагностика и сопряжение** with TV-side controls for pairing, read-only power-state checks, a reversible 3-second Screen Off/On test, emergency Screen On, and forgetting the local pairing. There is deliberately no one-tap TV Off diagnostic button.
 
 ## Sleep modes
 
@@ -171,7 +173,7 @@ GitHub Actions runs syntax checks, integration/safety tests and verifies the exa
 
 Do this in order:
 
-1. Install the plugin and verify `LampaSleep.version === '0.1.0-alpha'`.
+1. Install the plugin and verify `LampaSleep.version === '0.1.1-alpha'`.
 2. Leave **Разрешить управление TV = Off**. Arm a 1-episode sleep action with **Stop playback** and verify the next episode does not start.
 3. Test a 15-minute hard/soft timer with a temporary shorter value through DevTools if desired.
 4. Enable TV control and try `127.0.0.1`.
