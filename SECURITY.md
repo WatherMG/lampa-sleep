@@ -9,7 +9,7 @@ Lampa Sleep controls playback and, when explicitly enabled, can request Screen O
 - Power integration defaults to **off**.
 - Network target validation allows only loopback/RFC1918 IPv4.
 - SSAP requires TV-side pairing and a client key.
-- The client key is stored locally through `Lampa.Storage` and is never returned by `status()`.
+- The client key is stored directly in this app origin's `window.localStorage`, outside `Lampa.Storage`, and is never returned by `status()`.
 - Debug logging never prints the key.
 - The registration manifest is unsigned and asks only for power/screen-state permissions.
 - No root, SSH, Homebrew service, private Luna power call, alert/Luna trick, external HTTP proxy or cloud service is used.
@@ -23,6 +23,7 @@ Lampa Sleep controls playback and, when explicitly enabled, can request Screen O
 - Whether every firmware accepts the intentionally minimal unsigned SSAP manifest.
 - Whether an installed Lampa build permits clear-text local `ws://` WebSockets to its own TV/LAN address.
 - Exact behavior of Screen Off on every LG panel/firmware.
+- LAN fallback uses unencrypted `ws://` on port 3000; loopback is preferable. Use a LAN IP only on a trusted local network.
 
 These are compatibility questions and must be established with a physical-TV acceptance test.
 
