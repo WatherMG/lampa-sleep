@@ -309,6 +309,7 @@
   }
 
   function getPowerState(callback) {
+    callback = typeof callback === 'function' ? callback : function () {};
     requirePower(function (guardError) {
       if (guardError) return callback(guardError);
       ssap.request('ssap://com.webos.service.tvpower/power/getPowerState', {}, function (err, payload) {
@@ -320,6 +321,7 @@
   }
 
   function screenOff(callback) {
+    callback = typeof callback === 'function' ? callback : function () {};
     requirePower(function (guardError) {
       if (guardError) return callback(guardError);
       ssap.request('ssap://com.webos.service.tvpower/power/turnOffScreen', {}, function (err, payload) {
@@ -330,6 +332,7 @@
   }
 
   function screenOn(callback) {
+    callback = typeof callback === 'function' ? callback : function () {};
     requirePower(function (guardError) {
       if (guardError) return callback(guardError);
       ssap.request('ssap://com.webos.service.tvpower/power/turnOnScreen', {}, function (err, payload) {
@@ -340,6 +343,7 @@
   }
 
   function powerOff(callback) {
+    callback = typeof callback === 'function' ? callback : function () {};
     requirePower(function (guardError) {
       if (guardError) return callback(guardError);
       ssap.request('ssap://system/turnOff', {}, function (err, payload) {
@@ -379,6 +383,15 @@
     }, 350);
   }
 
+  function warnIfPowerUnavailable(action) {
+    if (action === 'stop') return;
+    if (!config.powerEnabled) {
+      notify('Lampa Sleep: управление TV выключено; по таймеру будет гарантированно остановлено только видео.');
+    } else if (!ssap.clientKey()) {
+      notify('Lampa Sleep: TV не связан; выполните pairing, иначе по таймеру будет остановлено только видео.');
+    }
+  }
+
   function armMinutes(minutes, options) {
     minutes = Number(minutes);
     if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 24 * 60) {
@@ -389,6 +402,7 @@
     state.active = true;
     state.mode = 'minutes';
     state.action = options.action || config.defaultAction;
+    warnIfPowerUnavailable(state.action);
     state.deadline = Date.now() + minutes * 60000;
     var soft = options.soft == null ? config.softTimer : !!options.soft;
     state.timer = setTimeout(function () {
@@ -415,6 +429,7 @@
     state.active = true;
     state.mode = 'episodes';
     state.action = options.action || config.defaultAction;
+    warnIfPowerUnavailable(state.action);
     state.remainingEpisodes = count;
     notify('Lampa Sleep: остановка после ' + count + ' видео/сер.');
     return snapshot();
@@ -572,7 +587,10 @@
     param(KEY_HOST, 'input', '127.0.0.1', null,
       'Адрес этого LG TV', 'Сначала попробуйте 127.0.0.1. Разрешены только loopback и приватные LAN IPv4.',
       function (value) {
-        if (!isSafeHost(value)) return notify('Lampa Sleep: разрешён только localhost/приватный IPv4.');
+        if (!isSafeHost(value)) {
+          storageSet(KEY_HOST, config.host);
+          return notify('Lampa Sleep: разрешён только localhost/приватный IPv4.');
+        }
         config.host = String(value).trim();
       });
 
