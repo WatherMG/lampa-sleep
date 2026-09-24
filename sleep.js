@@ -12,7 +12,7 @@
     return;
   }
 
-  var VERSION = '0.1.0-alpha';
+  var VERSION = '0.1.1-alpha';
   var STORAGE_PREFIX = 'lampa_sleep_';
   var KEY_CLIENT = STORAGE_PREFIX + 'ssap_key';
   var KEY_HOST = STORAGE_PREFIX + 'ssap_host';
@@ -60,8 +60,38 @@
     timer: null,
     lastError: '',
     lastPowerState: '',
+    lastOperation: '',
+    lastResult: 'Не проверялось',
+    connectionStage: 'idle',
     playerActive: false
   };
+
+  var diagnosticStatusItem = null;
+
+  function diagnosticText() {
+    var parts = [
+      'Pairing: ' + (ssap && ssap.clientKey && ssap.clientKey() ? 'есть' : 'нет'),
+      'SSAP: ' + state.connectionStage,
+      'Последнее: ' + state.lastResult
+    ];
+    if (state.lastPowerState) parts.push('Power: ' + state.lastPowerState);
+    return parts.join(' · ');
+  }
+
+  function refreshDiagnosticStatus() {
+    if (!diagnosticStatusItem || !diagnosticStatusItem.find) return;
+    try {
+      diagnosticStatusItem.find('.settings-param__name').text('Статус: ' + diagnosticText());
+    } catch (e) {}
+  }
+
+  function setDiagnostic(stage, operation, result) {
+    if (stage) state.connectionStage = stage;
+    if (operation) state.lastOperation = operation;
+    if (result) state.lastResult = result;
+    refreshDiagnosticStatus();
+    log('diagnostic', stage, operation, result);
+  }
 
   function log() {
     if (config.debug && window.console) {
@@ -190,12 +220,14 @@
     }
 
     self.close();
+    setDiagnostic('connecting', 'SSAP', 'Подключение к ' + host + ':3000');
     var done = false;
     function finish(err) {
       if (done) return;
       done = true;
       if (self.timer) clearTimeout(self.timer);
       self.timer = null;
+      if (err) setDiagnostic('error', 'SSAP', String(err.message || err));
       callback(err || null);
     }
 
@@ -211,10 +243,11 @@
     self.timer = setTimeout(function () {
       finish(new Error('SSAP connection timeout'));
       self.close();
-    }, 8000);
+    }, 30000);
 
     ws.onopen = function () {
       self.connected = true;
+      setDiagnostic('registering', 'Pairing', self.clientKey() ? 'Проверка сохранённого pairing' : 'Ожидание подтверждения на TV');
       var payload = {
         forcePairing: false,
         pairingType: 'PROMPT',
@@ -234,7 +267,14 @@
         var newKey = msg.payload && msg.payload['client-key'];
         if (typeof newKey === 'string' && newKey.length >= 8) self.saveClientKey(newKey);
         self.registered = true;
+        setDiagnostic('paired', 'Pairing', 'TV связан');
         finish(null);
+        return;
+      }
+
+      if ((msg.type === 'pairing' || msg.type === 'response') && msg.id === 'register_0' &&
+          msg.payload && msg.payload.pairingType === 'PROMPT') {
+        setDiagnostic('waiting_approval', 'Pairing', 'Подтвердите запрос на экране TV');
         return;
       }
 
@@ -246,7 +286,9 @@
       if ((msg.type === 'response' || msg.type === 'error') && msg.id && self.pending[msg.id]) {
         var cb = self.pending[msg.id];
         delete self.pending[msg.id];
-        cb(msg.type === 'error' ? new Error(msg.error || 'SSAP request failed') : null, msg.payload || {});
+        var requestError = msg.type === 'error' ? new Error(msg.error || 'SSAP request failed') : null;
+        self.close();
+        cb(requestError, msg.payload || {});
       }
     };
 
@@ -278,6 +320,7 @@
       setTimeout(function () {
         if (!self.pending[id]) return;
         delete self.pending[id];
+        self.close();
         callback(new Error('SSAP request timeout'));
       }, 5000);
     }
@@ -455,6 +498,9 @@
       paired: !!ssap.clientKey(),
       host: config.host,
       lastPowerState: state.lastPowerState,
+      lastOperation: state.lastOperation,
+      lastResult: state.lastResult,
+      connectionStage: state.connectionStage,
       lastError: state.lastError
     };
   }
@@ -597,6 +643,103 @@
     param(KEY_DEBUG, 'trigger', false, null,
       'Диагностика', 'Логи без client-key и других секретов.',
       function (value) { config.debug = asBool(value); });
+
+    Lampa.SettingsApi.addParam({
+      component: component,
+      param: { type: 'title' },
+      field: { name: 'Диагностика и сопряжение' }
+    });
+
+    Lampa.SettingsApi.addParam({
+      component: component,
+      param: { type: 'static' },
+      field: { name: 'Статус: ' + diagnosticText(), description: 'Client-key никогда не отображается.' },
+      onRender: function (item) {
+        diagnosticStatusItem = item;
+        refreshDiagnosticStatus();
+      }
+    });
+
+    function diagnosticButton(name, description, action) {
+      Lampa.SettingsApi.addParam({
+        component: component,
+        param: { type: 'button' },
+        field: { name: name, description: description || '' },
+        onChange: action
+      });
+    }
+
+    diagnosticButton('Сопрячь TV', 'LG должен показать системный запрос подтверждения. Ожидание до 30 секунд.', function () {
+      if (!config.powerEnabled) return notify('Сначала включите «Разрешить управление TV».');
+      setDiagnostic('connecting', 'Pairing', 'Запуск сопряжения…');
+      ssap.connect(function (err) {
+        recordPowerError(err);
+        ssap.close();
+        if (err) notify('Lampa Sleep: сопряжение не выполнено: ' + err.message);
+        else notify('Lampa Sleep: TV успешно связан.');
+        refreshDiagnosticStatus();
+      });
+    });
+
+    diagnosticButton('Проверить состояние TV', 'Безопасный read-only запрос текущего состояния питания.', function () {
+      setDiagnostic('checking', 'Power state', 'Запрос состояния…');
+      getPowerState(function (err, payload) {
+        if (err) {
+          setDiagnostic('error', 'Power state', err.message);
+          notify('Lampa Sleep: ' + err.message);
+        } else {
+          var value = payload && (payload.state || payload.processing) || 'ответ получен';
+          setDiagnostic('idle', 'Power state', String(value));
+          notify('Lampa Sleep: состояние TV — ' + value);
+        }
+      });
+    });
+
+    diagnosticButton('Тест Screen Off → On', 'Выключает только экран на 3 секунды и автоматически включает его обратно. Видео не запускается.', function () {
+      if (!config.powerEnabled || !ssap.clientKey()) {
+        return notify('Сначала включите управление TV и выполните сопряжение.');
+      }
+      setDiagnostic('testing_screen', 'Screen Off/On', 'Выключение экрана…');
+      screenOff(function (offErr) {
+        if (offErr) {
+          setDiagnostic('error', 'Screen Off/On', offErr.message);
+          return notify('Lampa Sleep: Screen Off не выполнен: ' + offErr.message);
+        }
+        notify('Lampa Sleep: экран выключен на 3 секунды.');
+        setTimeout(function () {
+          setDiagnostic('testing_screen', 'Screen Off/On', 'Включение экрана…');
+          screenOn(function (onErr) {
+            if (onErr) {
+              setDiagnostic('error', 'Screen Off/On', 'Screen On: ' + onErr.message);
+              notify('Lampa Sleep: Screen On не выполнен. Используйте обычный пульт LG. ' + onErr.message);
+            } else {
+              setDiagnostic('idle', 'Screen Off/On', 'Успешно');
+              notify('Lampa Sleep: Screen Off/On успешно.');
+            }
+          });
+        }, 3000);
+      });
+    });
+
+    diagnosticButton('Включить экран', 'Аварийная отдельная команда Screen On после успешного pairing.', function () {
+      setDiagnostic('testing_screen', 'Screen On', 'Отправка команды…');
+      screenOn(function (err) {
+        if (err) {
+          setDiagnostic('error', 'Screen On', err.message);
+          notify('Lampa Sleep: Screen On не выполнен: ' + err.message);
+        } else {
+          setDiagnostic('idle', 'Screen On', 'Успешно');
+          notify('Lampa Sleep: команда Screen On отправлена.');
+        }
+      });
+    });
+
+    diagnosticButton('Забыть сопряжение', 'Удаляет только локальный client-key Lampa Sleep.', function () {
+      ssap.forget();
+      state.lastError = '';
+      setDiagnostic('idle', 'Pairing', 'Локальный pairing удалён');
+      notify('Lampa Sleep: локальный pairing удалён.');
+    });
   }
 
   addSettings();
@@ -617,8 +760,10 @@
       }
       ssap.connect(function (err) {
         recordPowerError(err);
+        ssap.close();
         if (err) notify('Lampa Sleep: pairing не выполнен: ' + err.message);
         else notify('Lampa Sleep: TV связан. Power-команды доступны.');
+        refreshDiagnosticStatus();
         if (callback) callback(err || null);
       });
     },

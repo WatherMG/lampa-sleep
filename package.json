@@ -1,6 +1,6 @@
 {
   "name": "lampa-sleep",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.1-alpha.0",
   "private": true,
   "description": "Safety-first sleep timer and LG webOS power controls for Lampa",
   "repository": "https://github.com/WatherMG/lampa-sleep",
