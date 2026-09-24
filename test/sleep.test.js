@@ -206,7 +206,7 @@ function harness(options = {}) {
 
 test('registers a separate settings component and safe text host input', () => {
   const h = harness();
-  assert.equal(h.api.version, '0.1.0-alpha');
+  assert.equal(h.api.version, '0.1.1-alpha');
   assert.equal(h.components[0].component, 'lampa_sleep');
   const input = h.settings.find(x => x.param.name === 'lampa_sleep_ssap_host');
   assert.ok(input);
@@ -328,4 +328,69 @@ test('player start installs one sleep button in the stock panel', () => {
   h.emit('player:start', {});
   h.emit('player:start', {});
   assert.ok(h.panel._sleepButton);
+});
+
+test('diagnostic settings expose pairing and safe screen checks without TV off button', () => {
+  const h = harness();
+  const buttons = h.settings.filter(x => x.param.type === 'button').map(x => x.field.name);
+  assert.ok(buttons.includes('Сопрячь TV'));
+  assert.ok(buttons.includes('Проверить состояние TV'));
+  assert.ok(buttons.includes('Тест Screen Off → On'));
+  assert.ok(buttons.includes('Включить экран'));
+  assert.ok(buttons.includes('Забыть сопряжение'));
+  assert.equal(buttons.some(name => /выключить телевизор/i.test(name)), false);
+});
+
+test('pairing timeout allows 30 seconds for on-TV approval', () => {
+  const h = harness();
+  h.api.config.powerEnabled = true;
+  h.api.pair(() => {});
+  const timeout = [...h.timers.values()].find(x => x.delay === 30000);
+  assert.ok(timeout);
+});
+
+test('successful diagnostic request closes SSAP connection immediately', () => {
+  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+  h.api.config.powerEnabled = true;
+  let done = false;
+  h.api.getPowerState((err) => {
+    assert.equal(err, null);
+    done = true;
+  });
+  const ws = h.sockets[0];
+  ws.open();
+  ws.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
+  const request = ws.sent[1];
+  ws.message({ type: 'response', id: request.id, payload: { state: 'Active' } });
+  assert.equal(done, true);
+  assert.equal(ws.readyState, 3);
+});
+
+test('screen diagnostic performs screen off then screen on, never TV off', () => {
+  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+  h.api.config.powerEnabled = true;
+  const btn = h.settings.find(x => x.param.type === 'button' && x.field.name === 'Тест Screen Off → On');
+  assert.ok(btn);
+  btn.onChange();
+
+  const first = h.sockets[0];
+  first.open();
+  first.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
+  assert.equal(first.sent[1].uri, 'ssap://com.webos.service.tvpower/power/turnOffScreen');
+  first.message({ type: 'response', id: first.sent[1].id, payload: { returnValue: true } });
+
+  h.fireTimer(3000);
+  const second = h.sockets[1];
+  second.open();
+  second.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
+  assert.equal(second.sent[1].uri, 'ssap://com.webos.service.tvpower/power/turnOnScreen');
+  assert.equal([first, second].some(ws => ws.sent.some(msg => msg.uri === 'ssap://system/turnOff')), false);
+});
+
+test('diagnostic status never exposes the SSAP client key', () => {
+  const secret = 'secret-client-key-123';
+  const h = harness({ localStorage: { lampa_sleep_ssap_key: secret } });
+  const status = h.api.status();
+  assert.equal(Object.values(status).some(value => value === secret), false);
+  assert.equal(JSON.stringify(h.settings).includes(secret), false);
 });
