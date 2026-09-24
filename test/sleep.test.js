@@ -11,6 +11,7 @@ const plugin = fs.readFileSync(path.join(__dirname, '..', 'sleep.js'), 'utf8');
 function harness(options = {}) {
   const events = {};
   const storage = Object.assign({}, options.storage || {});
+  const localStorageData = Object.assign({}, options.localStorage || {});
   const settings = [];
   const components = [];
   const notices = [];
@@ -56,6 +57,11 @@ function harness(options = {}) {
   }
 
   const fakeWindow = {
+    localStorage: {
+      getItem(name) { return Object.hasOwn(localStorageData, name) ? String(localStorageData[name]) : null; },
+      setItem(name, value) { localStorageData[name] = String(value); },
+      removeItem(name) { delete localStorageData[name]; }
+    },
     console: {
       log(...args) { logs.push(['log', ...args]); },
       warn(...args) { logs.push(['warn', ...args]); },
@@ -182,6 +188,7 @@ function harness(options = {}) {
     api: fakeWindow.LampaSleep,
     Lampa,
     storage,
+    localStorageData,
     settings,
     components,
     notices,
@@ -252,12 +259,13 @@ test('pairing uses PROMPT, stores the client key locally and never logs it', () 
   const secret = 'secret-client-key-123';
   ws.message({ type: 'registered', id: 'register_0', payload: { 'client-key': secret } });
   assert.equal(pairError, null);
-  assert.equal(h.storage.lampa_sleep_ssap_key, secret);
+  assert.equal(h.localStorageData.lampa_sleep_ssap_key, secret);
+  assert.equal(Object.hasOwn(h.storage, 'lampa_sleep_ssap_key'), false);
   assert.equal(JSON.stringify(h.logs).includes(secret), false);
 });
 
 test('screen off sends only the documented SSAP power request after pairing', () => {
-  const h = harness({ storage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
   h.api.config.powerEnabled = true;
   let result = 'pending';
   h.api.screenOff(err => { result = err; });
@@ -272,7 +280,7 @@ test('screen off sends only the documented SSAP power request after pairing', ()
 });
 
 test('TV off uses ssap system/turnOff and no Luna fallback', () => {
-  const h = harness({ storage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
   h.api.config.powerEnabled = true;
   h.api.powerOff(() => {});
   const ws = h.sockets[0];
