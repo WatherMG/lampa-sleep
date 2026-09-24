@@ -337,7 +337,12 @@
 
   function executeAction(action) {
     var selected = /^(stop|screen_off|tv_off)$/.test(action) ? action : 'stop';
+    var guardNext = state.blockNext;
     resetSchedule();
+    if (guardNext) {
+      state.blockNext = true;
+      setTimeout(function () { state.blockNext = false; }, 3000);
+    }
     stopPlayback();
 
     if (selected === 'stop') {
