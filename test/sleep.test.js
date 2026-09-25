@@ -62,6 +62,28 @@ function harness(options = {}) {
       service: {
         request(uri, request) {
           serviceRequests.push({ uri, request });
+
+          if (uri === 'luna://io.github.wathermg.lampasleep.service') {
+            const defaults = {
+              status: { returnValue: true, version: '0.2.0-alpha', callerAuthorized: true, tvPaired: true },
+              authorize: { returnValue: true },
+              pairTv: { returnValue: true, tvPaired: true },
+              forgetTvPairing: { returnValue: true },
+              getPowerState: { returnValue: true, payload: { state: 'Active' } },
+              screenOff: { returnValue: true, payload: { returnValue: true } },
+              screenOn: { returnValue: true, payload: { returnValue: true } },
+              powerOff: { returnValue: true, payload: { accepted: true } }
+            };
+            const configured = options.companionResponses && options.companionResponses[request.method];
+            const response = configured === undefined ? defaults[request.method] : configured;
+            if (response instanceof Error || (response && response.returnValue === false)) {
+              request.onFailure(response instanceof Error ? { errorText: response.message } : response);
+            } else {
+              request.onSuccess(response || { returnValue: true });
+            }
+            return { cancel() {} };
+          }
+
           const response = options.networkStatus || {
             returnValue: true,
             wifi: { state: 'connected', ipAddress: '192.168.1.50' },
@@ -223,7 +245,7 @@ function harness(options = {}) {
 
 test('registers a separate settings component and safe text host input', () => {
   const h = harness();
-  assert.equal(h.api.version, '0.1.2-alpha');
+  assert.equal(h.api.version, '0.2.0-alpha');
   assert.equal(h.components[0].component, 'lampa_sleep');
   const input = h.settings.find(x => x.param.name === 'lampa_sleep_ssap_host');
   assert.ok(input);
