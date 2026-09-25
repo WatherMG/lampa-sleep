@@ -2,7 +2,7 @@
 
 Safety-first sleep timer and binge-control plugin for **Lampa**, designed first for LG webOS.
 
-Current version: **0.1.1-alpha**.
+Current version: **0.1.2-alpha**.
 
 > Hardware status: timer/player integration is covered by automated tests. LG SSAP commands are based on the paired local-control protocol, but same-TV loopback/LAN operation still requires physical testing on an LG TV before this is called production-ready.
 
@@ -61,12 +61,12 @@ See [SECURITY.md](SECURITY.md) and [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## LG TV pairing
 
-### 1. Start with loopback
+### 1. Use automatic TV address detection
 
 Settings → Lampa Sleep:
 
 - **Разрешить управление TV** → On
-- **Адрес этого LG TV** → `127.0.0.1`
+- **Адрес LG TV** → `auto`
 
 Then open Lampa DevTools and run:
 
@@ -74,11 +74,11 @@ Then open Lampa DevTools and run:
 LampaSleep.pair()
 ```
 
-If the TV accepts local SSAP loopback, LG should display its normal pairing prompt. Accept it on the TV.
+`auto` asks the official webOS Connection Manager for the active Wi-Fi/wired private IP and then tries SSAP on that address. Use the **Определить адрес TV** diagnostic button first; no console is required.
 
-### 2. If loopback is rejected
+### 2. If automatic detection fails
 
-Use the TV's own private LAN address shown by LG network settings, for example:
+Enter the TV's own private LAN address shown by LG network settings, for example:
 
 ```text
 192.168.1.42
@@ -173,7 +173,7 @@ GitHub Actions runs syntax checks, integration/safety tests and verifies the exa
 
 Do this in order:
 
-1. Install the plugin and verify `LampaSleep.version === '0.1.1-alpha'`.
+1. Install the plugin and verify `LampaSleep.version === '0.1.2-alpha'`.
 2. Leave **Разрешить управление TV = Off**. Arm a 1-episode sleep action with **Stop playback** and verify the next episode does not start.
 3. Test a 15-minute hard/soft timer with a temporary shorter value through DevTools if desired.
 4. Enable TV control and try `127.0.0.1`.
@@ -186,3 +186,16 @@ Do this in order:
 11. Verify ordinary movies, torrents, IPTV and next-episode behavior with no active sleep timer.
 
 For a failure, enable diagnostics and capture console lines prefixed with `[LampaSleep]`. Do **not** share local-storage dumps or the SSAP client key.
+
+
+## SSAP browser-origin limitation
+
+The first hardware test showed that `127.0.0.1:3000` did not produce an LG pairing prompt. SSAP implementations are known to filter WebSocket `Origin` values for browser clients. Some historical projects worked around that by deliberately changing the Origin to `null`/using a `data:` context. **Lampa Sleep does not use that bypass.**
+
+Version 0.1.2-alpha therefore:
+- obtains the TV's active LAN IP using LG's documented `com.palm.connectionmanager/getStatus`;
+- tries the normal browser WebSocket directly to that private address;
+- distinguishes a 5-second socket-open failure from a 30-second pairing-approval timeout;
+- reports the exact stage in the on-TV diagnostics UI.
+
+If LG rejects the normal browser Origin even for the TV's own LAN IP, this power-control approach will be treated as unsupported rather than bypassing SSAP origin protections.

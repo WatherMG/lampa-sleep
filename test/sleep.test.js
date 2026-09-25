@@ -18,6 +18,7 @@ function harness(options = {}) {
   const logs = [];
   const sockets = [];
   const played = [];
+  const serviceRequests = [];
   const timers = new Map();
   let nextTimer = 0;
   let closeCount = 0;
@@ -57,6 +58,21 @@ function harness(options = {}) {
   }
 
   const fakeWindow = {
+    webOS: options.noWebOS ? undefined : {
+      service: {
+        request(uri, request) {
+          serviceRequests.push({ uri, request });
+          const response = options.networkStatus || {
+            returnValue: true,
+            wifi: { state: 'connected', ipAddress: '192.168.1.50' },
+            wired: { state: 'disconnected' }
+          };
+          if (options.networkFailure) request.onFailure(options.networkFailure);
+          else request.onSuccess(response);
+          return { cancel() {} };
+        }
+      }
+    },
     localStorage: {
       getItem(name) { return Object.hasOwn(localStorageData, name) ? String(localStorageData[name]) : null; },
       setItem(name, value) { localStorageData[name] = String(value); },
@@ -196,6 +212,7 @@ function harness(options = {}) {
     sockets,
     timers,
     played,
+    serviceRequests,
     panel,
     emit,
     fireTimer,
@@ -206,7 +223,7 @@ function harness(options = {}) {
 
 test('registers a separate settings component and safe text host input', () => {
   const h = harness();
-  assert.equal(h.api.version, '0.1.1-alpha');
+  assert.equal(h.api.version, '0.1.2-alpha');
   assert.equal(h.components[0].component, 'lampa_sleep');
   const input = h.settings.find(x => x.param.name === 'lampa_sleep_ssap_host');
   assert.ok(input);
@@ -216,7 +233,7 @@ test('registers a separate settings component and safe text host input', () => {
 
 test('accepts only loopback and private IPv4 SSAP targets', () => {
   const h = harness();
-  const valid = ['127.0.0.1', 'localhost', '10.1.2.3', '172.16.0.1', '172.31.255.254', '192.168.1.20'];
+  const valid = ['auto', '127.0.0.1', 'localhost', '10.1.2.3', '172.16.0.1', '172.31.255.254', '192.168.1.20'];
   const invalid = ['8.8.8.8', '1.1.1.1', 'example.com', '172.32.0.1', '192.169.1.1', '', '256.1.1.1'];
   valid.forEach(host => assert.equal(h.api._test.isSafeHost(host), true, host));
   invalid.forEach(host => assert.equal(h.api._test.isSafeHost(host), false, host));
@@ -250,7 +267,7 @@ test('pairing uses PROMPT, stores the client key locally and never logs it', () 
   h.api.pair(err => { pairError = err; });
   assert.equal(h.sockets.length, 1);
   const ws = h.sockets[0];
-  assert.equal(ws.url, 'ws://127.0.0.1:3000');
+  assert.equal(ws.url, 'ws://192.168.1.50:3000');
   ws.open();
   assert.equal(ws.sent[0].type, 'register');
   assert.equal(ws.sent[0].payload.pairingType, 'PROMPT');
@@ -341,12 +358,13 @@ test('diagnostic settings expose pairing and safe screen checks without TV off b
   assert.equal(buttons.some(name => /выключить телевизор/i.test(name)), false);
 });
 
-test('pairing timeout allows 30 seconds for on-TV approval', () => {
+test('pairing allows 30 seconds for on-TV approval after socket opens', () => {
   const h = harness();
   h.api.config.powerEnabled = true;
   h.api.pair(() => {});
-  const timeout = [...h.timers.values()].find(x => x.delay === 30000);
-  assert.ok(timeout);
+  assert.ok([...h.timers.values()].some(x => x.delay === 5000));
+  h.sockets[0].open();
+  assert.ok([...h.timers.values()].some(x => x.delay === 30000));
 });
 
 test('successful diagnostic request closes SSAP connection immediately', () => {
@@ -393,4 +411,63 @@ test('diagnostic status never exposes the SSAP client key', () => {
   const status = h.api.status();
   assert.equal(Object.values(status).some(value => value === secret), false);
   assert.equal(JSON.stringify(h.settings).includes(secret), false);
+});
+
+test('auto host uses official webOS Connection Manager and selects active private IP', () => {
+  const h = harness({
+    networkStatus: {
+      returnValue: true,
+      wifi: { state: 'connected', ipAddress: '192.168.50.77' },
+      wired: { state: 'disconnected' }
+    }
+  });
+  let result;
+  h.api.detectOwnTvIp((err, ip) => { result = { err, ip }; });
+  assert.equal(result.err, null);
+  assert.equal(result.ip, '192.168.50.77');
+  assert.equal(h.serviceRequests.length, 1);
+  assert.equal(h.serviceRequests[0].uri, 'luna://com.palm.connectionmanager');
+  assert.equal(h.serviceRequests[0].request.method, 'getStatus');
+  assert.equal(h.api.status().detectedHost, '192.168.50.77');
+});
+
+test('auto detection rejects a public interface address', () => {
+  const h = harness({
+    networkStatus: {
+      returnValue: true,
+      wifi: { state: 'connected', ipAddress: '8.8.8.8' },
+      wired: { state: 'disconnected' }
+    }
+  });
+  let error;
+  h.api.detectOwnTvIp(err => { error = err; });
+  assert.match(error.message, /приватный IP/);
+});
+
+test('pairing separates socket-open timeout from TV approval timeout', () => {
+  const h = harness();
+  h.api.config.powerEnabled = true;
+  let error;
+  h.api.pair(err => { error = err; });
+  assert.equal(h.sockets[0].url, 'ws://192.168.1.50:3000');
+  assert.ok([...h.timers.values()].some(x => x.delay === 5000));
+  h.fireTimer(5000);
+  assert.match(error.message, /WebSocket/);
+
+  const h2 = harness();
+  h2.api.config.powerEnabled = true;
+  let error2;
+  h2.api.pair(err => { error2 = err; });
+  h2.sockets[0].open();
+  assert.ok([...h2.timers.values()].some(x => x.delay === 30000));
+  h2.fireTimer(30000);
+  assert.match(error2.message, /pairing/);
+});
+
+test('manual private host bypasses network detection', () => {
+  const h = harness({ storage: { lampa_sleep_ssap_host: '192.168.10.9' } });
+  h.api.config.powerEnabled = true;
+  h.api.pair(() => {});
+  assert.equal(h.serviceRequests.length, 0);
+  assert.equal(h.sockets[0].url, 'ws://192.168.10.9:3000');
 });

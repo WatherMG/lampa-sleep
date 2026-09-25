@@ -6,7 +6,7 @@ for (const name of ['index.html', '.nojekyll', 'sleep.js']) {
   assert.ok(statSync(join('dist', name)).isFile(), 'Missing site file: ' + name);
 }
 const plugin = readFileSync(join('dist', 'sleep.js'), 'utf8');
-assert.match(plugin, /0\.1\.1-alpha/);
+assert.match(plugin, /0\.1\.2-alpha/);
 assert.match(plugin, /ssap:\/\/system\/turnOff/);
 assert.match(plugin, /turnOffScreen/);
 assert.doesNotMatch(plugin, /luna:\/\/com\.webos\.service\.tvpower/);
