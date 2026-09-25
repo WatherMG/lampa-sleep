@@ -253,25 +253,19 @@ test('registers a separate settings component and safe companion code input', ()
   assert.equal(input.param.values, 'string');
 });
 
-test('accepts only loopback and private IPv4 SSAP targets', () => {
+
+test('companion service is the configured power backend', () => {
   const h = harness();
-  const valid = ['auto', '127.0.0.1', 'localhost', '10.1.2.3', '172.16.0.1', '172.31.255.254', '192.168.1.20'];
-  const invalid = ['8.8.8.8', '1.1.1.1', 'example.com', '172.32.0.1', '192.169.1.1', '', '256.1.1.1'];
-  valid.forEach(host => assert.equal(h.api._test.isSafeHost(host), true, host));
-  invalid.forEach(host => assert.equal(h.api._test.isSafeHost(host), false, host));
+  h.api.refreshCompanionStatus(() => {});
+  assert.equal(h.api.status().companionAvailable, true);
 });
 
-test('SSAP manifest is unsigned and requests only three power capabilities', () => {
+
+test('power backend does not create browser sockets', () => {
   const h = harness();
-  const manifest = h.api._test.manifest();
-  assert.equal(manifest.appId, 'io.github.wathermg.lampa.sleep');
-  assert.equal(Object.hasOwn(manifest, 'signed'), false);
-  assert.equal(Object.hasOwn(manifest, 'signatures'), false);
-  assert.deepEqual(Array.from(manifest.permissions), [
-    'CONTROL_POWER',
-    'CONTROL_TV_SCREEN',
-    'READ_POWER_STATE'
-  ]);
+  h.api.config.powerEnabled = true;
+  h.api.getPowerState(() => {});
+  assert.equal(h.sockets.length, 0);
 });
 
 test('power calls fail closed while power integration is disabled', () => {
