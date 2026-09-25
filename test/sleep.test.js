@@ -358,12 +358,13 @@ test('diagnostic settings expose pairing and safe screen checks without TV off b
   assert.equal(buttons.some(name => /выключить телевизор/i.test(name)), false);
 });
 
-test('pairing timeout allows 30 seconds for on-TV approval', () => {
+test('pairing allows 30 seconds for on-TV approval after socket opens', () => {
   const h = harness();
   h.api.config.powerEnabled = true;
   h.api.pair(() => {});
-  const timeout = [...h.timers.values()].find(x => x.delay === 30000);
-  assert.ok(timeout);
+  assert.ok([...h.timers.values()].some(x => x.delay === 5000));
+  h.sockets[0].open();
+  assert.ok([...h.timers.values()].some(x => x.delay === 30000));
 });
 
 test('successful diagnostic request closes SSAP connection immediately', () => {
