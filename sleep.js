@@ -77,8 +77,10 @@
 
   function diagnosticText() {
     var parts = [
-      'Pairing: ' + (ssap && ssap.clientKey && ssap.clientKey() ? 'есть' : 'нет'),
-      'SSAP: ' + state.connectionStage,
+      'Companion: ' + (state.companionAvailable ? 'доступен' : 'не проверен'),
+      'Lampa: ' + (state.companionAuthorized ? 'authorized' : 'not authorized'),
+      'TV pairing: ' + (state.tvPaired ? 'есть' : 'нет'),
+      'Stage: ' + state.connectionStage,
       'Последнее: ' + state.lastResult
     ];
     if (state.lastPowerState) parts.push('Power: ' + state.lastPowerState);
@@ -630,7 +632,6 @@
     var fn = selected === 'screen_off' ? screenOff : powerOff;
     setTimeout(function () {
       fn(function (err) {
-        ssap.close();
         if (err) {
           notify('Lampa Sleep: видео остановлено, но TV-команда не выполнена: ' + err.message);
           return;
