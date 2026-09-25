@@ -421,45 +421,32 @@ test('screen diagnostic performs companion screenOff then screenOn and never pow
   assert.equal(h.sockets.length, 0);
 });
 
-test('diagnostic status never exposes the SSAP client key', () => {
-  const secret = 'secret-client-key-123';
-  const h = harness({ localStorage: { lampa_sleep_ssap_key: secret } });
+
+test('plugin status exposes readiness without credentials', () => {
+  const h = harness();
+  h.api.refreshCompanionStatus(() => {});
   const status = h.api.status();
-  assert.equal(Object.values(status).some(value => value === secret), false);
-  assert.equal(JSON.stringify(h.settings).includes(secret), false);
+  assert.equal(status.companionAvailable, true);
+  assert.equal(status.companionAuthorized, true);
+  assert.equal(status.tvPaired, true);
+  assert.equal(Object.hasOwn(status, 'clientKey'), false);
 });
 
-test('auto host uses official webOS Connection Manager and selects active private IP', () => {
-  const h = harness({
-    networkStatus: {
-      returnValue: true,
-      wifi: { state: 'connected', ipAddress: '192.168.50.77' },
-      wired: { state: 'disconnected' }
-    }
-  });
-  let result;
-  h.api.detectOwnTvIp((err, ip) => { result = { err, ip }; });
-  assert.equal(result.err, null);
-  assert.equal(result.ip, '192.168.50.77');
-  assert.equal(h.serviceRequests.length, 1);
-  assert.equal(h.serviceRequests[0].uri, 'luna://com.palm.connectionmanager');
-  assert.equal(h.serviceRequests[0].request.method, 'getStatus');
-  assert.equal(h.api.status().detectedHost, '192.168.50.77');
+
+test('power setup no longer performs network address discovery', () => {
+  const h = harness();
+  h.api.refreshCompanionStatus(() => {});
+  const networkCalls = h.serviceRequests.filter(x => x.uri === 'luna://com.palm.connectionmanager');
+  assert.equal(networkCalls.length, 0);
 });
 
-test('auto detection rejects a public interface address', () => {
-  const h = harness({
-    networkStatus: {
-      returnValue: true,
-      wifi: { state: 'connected', ipAddress: '8.8.8.8' },
-      wired: { state: 'disconnected' }
-    }
-  });
+
+test('companion authorization validates the setup code locally', () => {
+  const h = harness({ storage: { lampa_sleep_companion_code: 'abc' } });
   let error;
-  h.api.detectOwnTvIp(err => { error = err; });
-  assert.match(error.message, /приватный IP/);
+  h.api.authorizeCompanion(err => { error = err; });
+  assert.match(error.message, /6-значный/);
 });
-
 
 test('companion failures are surfaced without browser WebSocket fallback', () => {
   const h = harness({
