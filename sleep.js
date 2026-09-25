@@ -12,14 +12,14 @@
     return;
   }
 
-  var VERSION = '0.1.2-alpha';
+  var VERSION = '0.2.0-alpha';
   var STORAGE_PREFIX = 'lampa_sleep_';
-  var KEY_CLIENT = STORAGE_PREFIX + 'ssap_key';
-  var KEY_HOST = STORAGE_PREFIX + 'ssap_host';
   var KEY_POWER = STORAGE_PREFIX + 'power_enabled';
   var KEY_ACTION = STORAGE_PREFIX + 'default_action';
   var KEY_SOFT = STORAGE_PREFIX + 'soft_timer';
   var KEY_DEBUG = STORAGE_PREFIX + 'debug';
+  var KEY_COMPANION_CODE = STORAGE_PREFIX + 'companion_code';
+  var COMPANION_SERVICE = 'luna://io.github.wathermg.lampasleep.service';
 
   function storageGet(name, fallback) {
     try {
@@ -41,10 +41,10 @@
 
   var config = {
     powerEnabled: asBool(storageGet(KEY_POWER, false)),
-    host: storageGet(KEY_HOST, 'auto'),
     defaultAction: storageGet(KEY_ACTION, 'stop'),
     softTimer: asBool(storageGet(KEY_SOFT, true)),
-    debug: asBool(storageGet(KEY_DEBUG, false))
+    debug: asBool(storageGet(KEY_DEBUG, false)),
+    companionCode: storageGet(KEY_COMPANION_CODE, '')
   };
 
   if (!/^(stop|screen_off|tv_off)$/.test(config.defaultAction)) config.defaultAction = 'stop';
@@ -63,7 +63,9 @@
     lastOperation: '',
     lastResult: 'Не проверялось',
     connectionStage: 'idle',
-    detectedHost: '',
+    companionAvailable: false,
+    companionAuthorized: false,
+    tvPaired: false,
     playerActive: false
   };
 
@@ -71,8 +73,10 @@
 
   function diagnosticText() {
     var parts = [
-      'Pairing: ' + (ssap && ssap.clientKey && ssap.clientKey() ? 'есть' : 'нет'),
-      'SSAP: ' + state.connectionStage,
+      'Companion: ' + (state.companionAvailable ? 'доступен' : 'не проверен'),
+      'Lampa: ' + (state.companionAuthorized ? 'authorized' : 'not authorized'),
+      'TV pairing: ' + (state.tvPaired ? 'есть' : 'нет'),
+      'Stage: ' + state.connectionStage,
       'Последнее: ' + state.lastResult
     ];
     if (state.lastPowerState) parts.push('Power: ' + state.lastPowerState);
@@ -105,86 +109,123 @@
     else if (window.console) console.warn('[LampaSleep]', text);
   }
 
-  function isSafeHost(host) {
-    if (typeof host !== 'string') return false;
-    host = host.trim().toLowerCase();
-    if (host === 'auto' || host === 'localhost' || host === '127.0.0.1') return true;
-    var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-    if (!m) return false;
-    var a = m.slice(1).map(Number);
-    if (a.some(function (n) { return n < 0 || n > 255; })) return false;
-    return a[0] === 10 ||
-      (a[0] === 172 && a[1] >= 16 && a[1] <= 31) ||
-      (a[0] === 192 && a[1] === 168) ||
-      a[0] === 127;
-  }
-
-
-  function extractConnectedIp(status) {
-    if (!status || typeof status !== 'object') return '';
-    var candidates = [status.wifi, status.wired];
-    for (var i = 0; i < candidates.length; i++) {
-      var item = candidates[i];
-      if (!item || item.state !== 'connected' || !item.ipAddress) continue;
-      var ip = String(item.ipAddress).trim();
-      if (isSafeHost(ip) && ip !== '127.0.0.1') return ip;
-    }
-    return '';
-  }
-
-  function detectOwnTvIp(callback) {
+  function companionRequest(method, parameters, callback) {
     callback = typeof callback === 'function' ? callback : function () {};
-    if (!window.webOS || !window.webOS.service || typeof window.webOS.service.request !== 'function') {
-      callback(new Error('Публичный webOS Connection Manager недоступен'));
+    parameters = parameters || {};
+
+    if (window.webOS && window.webOS.service && typeof window.webOS.service.request === 'function') {
+      try {
+        window.webOS.service.request(COMPANION_SERVICE, {
+          method: method,
+          parameters: parameters,
+          onSuccess: function (result) {
+            state.companionAvailable = true;
+            callback(null, result || {});
+          },
+          onFailure: function (error) {
+            var text = error && (error.errorText || error.message || error.errorCode) || 'Companion service request failed';
+            callback(new Error(String(text)));
+          }
+        });
+      } catch (e) {
+        callback(e);
+      }
       return;
     }
 
-    setDiagnostic('detecting_ip', 'Network', 'Определение адреса TV…');
-    try {
-      window.webOS.service.request('luna://com.palm.connectionmanager', {
-        method: 'getStatus',
-        parameters: { subscribe: false },
-        onSuccess: function (response) {
-          var ip = extractConnectedIp(response);
-          if (!ip) {
-            setDiagnostic('error', 'Network', 'Не найден приватный IP активного интерфейса');
-            callback(new Error('Не удалось определить приватный IP телевизора'));
-            return;
+    if (window.PalmServiceBridge) {
+      try {
+        var bridge = new window.PalmServiceBridge();
+        var done = false;
+        bridge.onservicecallback = function (text) {
+          if (done) return;
+          done = true;
+          var result;
+          try { result = JSON.parse(text); }
+          catch (e) { result = { returnValue: false, errorText: text }; }
+          try { bridge.cancel(); } catch (e2) {}
+          if (!result || result.returnValue === false) {
+            callback(new Error(result && (result.errorText || result.errorCode) || 'Companion service request failed'));
+          } else {
+            state.companionAvailable = true;
+            callback(null, result);
           }
-          state.detectedHost = ip;
-          setDiagnostic('idle', 'Network', 'Адрес TV: ' + ip);
-          callback(null, ip);
-        },
-        onFailure: function (error) {
-          var message = error && (error.errorText || error.message) || 'Connection Manager error';
-          setDiagnostic('error', 'Network', message);
-          callback(new Error(message));
-        }
-      });
-    } catch (e) {
-      setDiagnostic('error', 'Network', String(e.message || e));
-      callback(e);
+        };
+        bridge.call(COMPANION_SERVICE + '/' + method, JSON.stringify(parameters));
+      } catch (e3) {
+        callback(e3);
+      }
+      return;
     }
+
+    callback(new Error('webOS Luna bridge недоступен'));
   }
 
-  function resolveSsAPHost(callback) {
-    var configured = String(config.host || 'auto').trim().toLowerCase();
-    if (configured !== 'auto' && configured !== 'localhost' && configured !== '127.0.0.1') {
-      if (!isSafeHost(configured)) return callback(new Error('Некорректный адрес TV'));
-      state.detectedHost = configured;
-      callback(null, configured);
-      return;
-    }
-
-    detectOwnTvIp(function (err, ip) {
-      if (!err && ip) return callback(null, ip);
-      if (configured === 'localhost' || configured === '127.0.0.1') {
-        state.detectedHost = configured;
-        setDiagnostic('idle', 'Network', 'Используется loopback ' + configured);
-        callback(null, configured);
+  function refreshCompanionStatus(callback) {
+    companionRequest('status', {}, function (err, result) {
+      if (err) {
+        state.companionAvailable = false;
+        state.companionAuthorized = false;
+        state.tvPaired = false;
+        state.lastError = err.message;
+        setDiagnostic('error', 'Companion', 'Companion не установлен или недоступен: ' + err.message);
+        if (callback) callback(err);
         return;
       }
-      callback(err || new Error('Адрес TV не определён'));
+
+      state.companionAvailable = true;
+      state.companionAuthorized = !!result.callerAuthorized;
+      state.tvPaired = !!result.tvPaired;
+      state.lastError = '';
+      setDiagnostic('idle', 'Companion',
+        'Service ' + (result.version || '?') +
+        ' · Lampa: ' + (state.companionAuthorized ? 'authorized' : 'not authorized') +
+        ' · TV: ' + (state.tvPaired ? 'paired' : 'not paired'));
+      if (callback) callback(null, result);
+    });
+  }
+
+  function authorizeCompanion(callback) {
+    var code = String(config.companionCode || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      var invalid = new Error('Введите 6-значный код из приложения Lampa Sleep Companion');
+      if (callback) callback(invalid);
+      else notify('Lampa Sleep: ' + invalid.message);
+      return;
+    }
+
+    setDiagnostic('authorizing', 'Companion', 'Авторизация Lampa…');
+    companionRequest('authorize', { code: code }, function (err) {
+      if (err) {
+        setDiagnostic('error', 'Companion', err.message);
+        if (callback) callback(err);
+        else notify('Lampa Sleep: авторизация companion не выполнена: ' + err.message);
+        return;
+      }
+      state.companionAuthorized = true;
+      config.companionCode = '';
+      storageSet(KEY_COMPANION_CODE, '');
+      setDiagnostic('idle', 'Companion', 'Lampa авторизована');
+      notify('Lampa Sleep: companion авторизован.');
+      if (callback) callback(null);
+    });
+  }
+
+  function pairTvViaCompanion(callback) {
+    callback = typeof callback === 'function' ? callback : function () {};
+    if (!config.powerEnabled) return callback(new Error('Сначала включите «Разрешить управление TV»'));
+
+    setDiagnostic('pairing_tv', 'LG SSAP', 'Запуск pairing через локальный companion…');
+    companionRequest('pairTv', {}, function (err, result) {
+      if (err) {
+        state.tvPaired = false;
+        setDiagnostic('error', 'LG SSAP', err.message);
+        callback(err);
+        return;
+      }
+      state.tvPaired = !!result.tvPaired;
+      setDiagnostic('idle', 'LG SSAP', state.tvPaired ? 'TV связан' : 'Pairing завершён без подтверждения');
+      callback(null, result);
     });
   }
 
@@ -219,277 +260,57 @@
     }
   }
 
-  function SSAPClient() {
-    this.ws = null;
-    this.connected = false;
-    this.registered = false;
-    this.pending = {};
-    this.seq = 0;
-    this.timer = null;
-  }
-
-  SSAPClient.prototype.clientKey = function () {
-    // Keep the pairing credential outside Lampa.Storage to avoid application-level
-    // sync/export mechanisms. It remains local to this web app origin.
-    try {
-      var key = window.localStorage ? window.localStorage.getItem(KEY_CLIENT) : '';
-      return typeof key === 'string' ? key : '';
-    } catch (e) {
-      return '';
-    }
-  };
-
-  SSAPClient.prototype.saveClientKey = function (key) {
-    try {
-      if (window.localStorage) window.localStorage.setItem(KEY_CLIENT, key);
-    } catch (e) {}
-  };
-
-  SSAPClient.prototype.forget = function () {
-    try {
-      if (window.localStorage) window.localStorage.removeItem(KEY_CLIENT);
-    } catch (e) {}
-    this.close();
-  };
-
-  SSAPClient.prototype.manifest = function () {
-    // Intentionally minimal and unsigned. We request only what this plugin needs.
-    // No copied LG test signature, no pointer/keyboard/audio/app permissions.
-    return {
-      manifestVersion: 1,
-      appVersion: VERSION,
-      appId: 'io.github.wathermg.lampa.sleep',
-      appName: 'Lampa Sleep',
-      localizedAppNames: { '': 'Lampa Sleep' },
-      permissions: ['CONTROL_POWER', 'CONTROL_TV_SCREEN', 'READ_POWER_STATE']
-    };
-  };
-
-  SSAPClient.prototype.close = function () {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-    if (this.ws) {
-      try { this.ws.close(); } catch (e) {}
-    }
-    this.ws = null;
-    this.connected = false;
-    this.registered = false;
-    this.pending = {};
-  };
-
-  SSAPClient.prototype.connect = function (callback) {
-    var self = this;
-    callback = typeof callback === 'function' ? callback : function () {};
-
-    resolveSsAPHost(function (resolveError, host) {
-      if (resolveError) {
-        callback(resolveError);
-        return;
-      }
-      if (!isSafeHost(host) || host === 'auto') {
-        callback(new Error('Разрешены только localhost и приватные LAN IPv4-адреса'));
-        return;
-      }
-      if (typeof window.WebSocket !== 'function') {
-        callback(new Error('WebSocket API недоступен'));
-        return;
-      }
-
-      self.close();
-      setDiagnostic('connecting', 'SSAP', 'Подключение к ' + host + ':3000');
-      var done = false;
-      var socketOpened = false;
-
-      function armTimeout(ms, message) {
-        if (self.timer) clearTimeout(self.timer);
-        self.timer = setTimeout(function () {
-          finish(new Error(message));
-          self.close();
-        }, ms);
-      }
-
-      function finish(err) {
-        if (done) return;
-        done = true;
-        if (self.timer) clearTimeout(self.timer);
-        self.timer = null;
-        if (err) setDiagnostic('error', 'SSAP', String(err.message || err));
-        callback(err || null);
-      }
-
-      var url = 'ws://' + host + ':3000';
-      var ws;
-      try {
-        ws = new window.WebSocket(url);
-      } catch (e) {
-        finish(e);
-        return;
-      }
-      self.ws = ws;
-      armTimeout(5000, 'Не удалось открыть SSAP WebSocket к ' + host + ':3000');
-
-      ws.onopen = function () {
-        socketOpened = true;
-        self.connected = true;
-        setDiagnostic('socket_open', 'SSAP', 'WebSocket открыт: ' + host + ':3000');
-        armTimeout(30000, 'WebSocket открыт, но TV не завершил SSAP pairing за 30 секунд');
-
-        var payload = {
-          forcePairing: false,
-          pairingType: 'PROMPT',
-          manifest: self.manifest()
-        };
-        var key = self.clientKey();
-        if (key) payload['client-key'] = key;
-        setDiagnostic('registering', 'Pairing', key ? 'Проверка сохранённого pairing' : 'Регистрация отправлена; ожидается запрос LG');
-        ws.send(JSON.stringify({ type: 'register', id: 'register_0', payload: payload }));
-      };
-
-      ws.onmessage = function (event) {
-        var msg;
-        try { msg = JSON.parse(event.data); } catch (e) { return; }
-        if (!msg || typeof msg !== 'object') return;
-
-        if (msg.type === 'registered' && (!msg.id || msg.id === 'register_0')) {
-          var newKey = msg.payload && msg.payload['client-key'];
-          if (typeof newKey === 'string' && newKey.length >= 8) self.saveClientKey(newKey);
-          self.registered = true;
-          setDiagnostic('paired', 'Pairing', 'TV связан через ' + host);
-          finish(null);
-          return;
-        }
-
-        if ((msg.type === 'pairing' || msg.type === 'response') &&
-            (!msg.id || msg.id === 'register_0') &&
-            msg.payload && msg.payload.pairingType === 'PROMPT') {
-          setDiagnostic('waiting_approval', 'Pairing', 'Подтвердите системный запрос LG на экране TV');
-          return;
-        }
-
-        if (msg.type === 'error' && (!msg.id || msg.id === 'register_0')) {
-          finish(new Error((msg.error || (msg.payload && msg.payload.errorText) || 'SSAP registration failed') + ''));
-          return;
-        }
-
-        if ((msg.type === 'response' || msg.type === 'error') && msg.id && self.pending[msg.id]) {
-          var cb = self.pending[msg.id];
-          delete self.pending[msg.id];
-          var requestError = msg.type === 'error' ? new Error(msg.error || 'SSAP request failed') : null;
-          self.close();
-          cb(requestError, msg.payload || {});
-        }
-      };
-
-      ws.onerror = function () {
-        finish(new Error(socketOpened ?
-          'SSAP WebSocket error после открытия соединения' :
-          'SSAP WebSocket не открылся. Возможна блокировка Origin/mixed-content или порт 3000 недоступен'));
-      };
-
-      ws.onclose = function () {
-        self.connected = false;
-        self.registered = false;
-        if (!done) {
-          finish(new Error(socketOpened ?
-            'SSAP WebSocket закрыт до завершения регистрации' :
-            'SSAP WebSocket отклонён до открытия соединения'));
-        }
-      };
-    });
-  };
-
-  SSAPClient.prototype.request = function (uri, payload, callback) {
-    var self = this;
-    function send() {
-      if (!self.ws || !self.registered || self.ws.readyState !== 1) {
-        callback(new Error('SSAP is not registered'));
-        return;
-      }
-      var id = 'lampa_sleep_' + (++self.seq);
-      self.pending[id] = callback;
-      self.ws.send(JSON.stringify({
-        type: 'request',
-        id: id,
-        uri: uri,
-        payload: payload || {}
-      }));
-      setTimeout(function () {
-        if (!self.pending[id]) return;
-        delete self.pending[id];
-        self.close();
-        callback(new Error('SSAP request timeout'));
-      }, 5000);
-    }
-
-    if (self.ws && self.registered && self.ws.readyState === 1) send();
-    else self.connect(function (err) {
-      if (err) callback(err);
-      else send();
-    });
-  };
-
-  var ssap = new SSAPClient();
-
   function recordPowerError(err) {
     state.lastError = err ? String(err.message || err) : '';
     if (state.lastError) log('power error', state.lastError);
   }
 
-  function requirePower(callback) {
+  function ensurePowerEnabled(callback) {
     if (!config.powerEnabled) {
       callback(new Error('Управление питанием отключено в настройках'));
-      return;
-    }
-    if (!ssap.clientKey()) {
-      callback(new Error('LG TV ещё не связан с Lampa Sleep'));
       return;
     }
     callback(null);
   }
 
-  function getPowerState(callback) {
+  function companionPower(method, callback) {
     callback = typeof callback === 'function' ? callback : function () {};
-    requirePower(function (guardError) {
+    ensurePowerEnabled(function (guardError) {
       if (guardError) return callback(guardError);
-      ssap.request('ssap://com.webos.service.tvpower/power/getPowerState', {}, function (err, payload) {
-        if (!err && payload && typeof payload.state === 'string') state.lastPowerState = payload.state;
+
+      companionRequest(method, {}, function (err, result) {
         recordPowerError(err);
-        callback(err, payload);
+        if (err) {
+          state.companionAvailable = false;
+          callback(err);
+          return;
+        }
+        state.companionAvailable = true;
+        state.companionAuthorized = true;
+        state.tvPaired = true;
+        callback(null, result && (result.payload || result));
       });
+    });
+  }
+
+  function getPowerState(callback) {
+    companionPower('getPowerState', function (err, payload) {
+      if (!err && payload && typeof payload.state === 'string') state.lastPowerState = payload.state;
+      callback = typeof callback === 'function' ? callback : function () {};
+      callback(err, payload);
     });
   }
 
   function screenOff(callback) {
-    callback = typeof callback === 'function' ? callback : function () {};
-    requirePower(function (guardError) {
-      if (guardError) return callback(guardError);
-      ssap.request('ssap://com.webos.service.tvpower/power/turnOffScreen', {}, function (err, payload) {
-        recordPowerError(err);
-        callback(err, payload);
-      });
-    });
+    companionPower('screenOff', callback);
   }
 
   function screenOn(callback) {
-    callback = typeof callback === 'function' ? callback : function () {};
-    requirePower(function (guardError) {
-      if (guardError) return callback(guardError);
-      ssap.request('ssap://com.webos.service.tvpower/power/turnOnScreen', {}, function (err, payload) {
-        recordPowerError(err);
-        callback(err, payload);
-      });
-    });
+    companionPower('screenOn', callback);
   }
 
   function powerOff(callback) {
-    callback = typeof callback === 'function' ? callback : function () {};
-    requirePower(function (guardError) {
-      if (guardError) return callback(guardError);
-      ssap.request('ssap://system/turnOff', {}, function (err, payload) {
-        recordPowerError(err);
-        callback(err, payload);
-      });
-    });
+    companionPower('powerOff', callback);
   }
 
   function executeAction(action) {
@@ -512,7 +333,6 @@
     var fn = selected === 'screen_off' ? screenOff : powerOff;
     setTimeout(function () {
       fn(function (err) {
-        ssap.close();
         if (err) {
           notify('Lampa Sleep: видео остановлено, но TV-команда не выполнена: ' + err.message);
           return;
@@ -526,8 +346,8 @@
     if (action === 'stop') return;
     if (!config.powerEnabled) {
       notify('Lampa Sleep: управление TV выключено; по таймеру будет гарантированно остановлено только видео.');
-    } else if (!ssap.clientKey()) {
-      notify('Lampa Sleep: TV не связан; выполните pairing, иначе по таймеру будет остановлено только видео.');
+    } else if (!state.companionAuthorized || !state.tvPaired) {
+      notify('Lampa Sleep: companion/TV ещё не готовы; по таймеру будет гарантированно остановлено только видео.');
     }
   }
 
@@ -591,9 +411,9 @@
       pendingEnd: state.pendingEnd,
       playerActive: state.playerActive,
       powerEnabled: config.powerEnabled,
-      paired: !!ssap.clientKey(),
-      host: config.host,
-      detectedHost: state.detectedHost,
+      paired: state.tvPaired,
+      companionAvailable: state.companionAvailable,
+      companionAuthorized: state.companionAuthorized,
       lastPowerState: state.lastPowerState,
       lastOperation: state.lastOperation,
       lastResult: state.lastResult,
@@ -727,16 +547,6 @@
       'Разрешить управление TV', 'По умолчанию выключено. Используется только локальный SSAP с подтверждением на экране TV.',
       function (value) { config.powerEnabled = asBool(value); });
 
-    param(KEY_HOST, 'input', 'auto', null,
-      'Адрес LG TV', 'Рекомендуется auto: IP определяется через официальный webOS Connection Manager. Также разрешены loopback и приватные LAN IPv4.',
-      function (value) {
-        if (!isSafeHost(value)) {
-          storageSet(KEY_HOST, config.host);
-          return notify('Lampa Sleep: используйте auto, localhost или приватный IPv4.');
-        }
-        config.host = String(value).trim();
-      });
-
     param(KEY_DEBUG, 'trigger', false, null,
       'Диагностика', 'Логи без client-key и других секретов.',
       function (value) { config.debug = asBool(value); });
@@ -747,10 +557,21 @@
       field: { name: 'Диагностика и сопряжение' }
     });
 
-    diagnosticButton('Определить адрес TV', 'Использует официальный LG webOS Connection Manager и ничего не меняет в сети.', function () {
-      detectOwnTvIp(function (err, ip) {
-        if (err) notify('Lampa Sleep: IP не определён: ' + err.message);
-        else notify('Lampa Sleep: адрес этого TV — ' + ip);
+    param(KEY_COMPANION_CODE, 'input', '', null,
+      'Код Companion', 'Откройте Lampa Sleep Companion на TV и введите показанный 6-значный код.',
+      function (value) { config.companionCode = String(value || '').trim(); });
+
+    diagnosticButton('Авторизовать companion', 'Одноразово привязывает установленную Lampa к локальному companion service.', function () {
+      authorizeCompanion(function (err) {
+        if (err) notify('Lampa Sleep: ' + err.message);
+        refreshDiagnosticStatus();
+      });
+    });
+
+    diagnosticButton('Проверить companion', 'Проверяет локальный service, авторизацию Lampa и наличие TV pairing.', function () {
+      refreshCompanionStatus(function (err) {
+        if (err) notify('Lampa Sleep: companion недоступен: ' + err.message);
+        else notify('Lampa Sleep: companion доступен.');
       });
     });
 
@@ -773,14 +594,10 @@
       });
     }
 
-    diagnosticButton('Сопрячь TV', 'LG должен показать системный запрос подтверждения. Ожидание до 30 секунд.', function () {
-      if (!config.powerEnabled) return notify('Сначала включите «Разрешить управление TV».');
-      setDiagnostic('connecting', 'Pairing', 'Запуск сопряжения…');
-      ssap.connect(function (err) {
-        recordPowerError(err);
-        ssap.close();
-        if (err) notify('Lampa Sleep: сопряжение не выполнено: ' + err.message);
-        else notify('Lampa Sleep: TV успешно связан.');
+    diagnosticButton('Сопрячь TV', 'Companion подключится к WSS loopback:3001. LG должен показать системный запрос подтверждения.', function () {
+      pairTvViaCompanion(function (err) {
+        if (err) notify('Lampa Sleep: сопряжение TV не выполнено: ' + err.message);
+        else notify('Lampa Sleep: TV успешно связан через companion.');
         refreshDiagnosticStatus();
       });
     });
@@ -800,8 +617,8 @@
     });
 
     diagnosticButton('Тест Screen Off → On', 'Выключает только экран на 3 секунды и автоматически включает его обратно. Видео не запускается.', function () {
-      if (!config.powerEnabled || !ssap.clientKey()) {
-        return notify('Сначала включите управление TV и выполните сопряжение.');
+      if (!config.powerEnabled || !state.companionAuthorized || !state.tvPaired) {
+        return notify('Сначала авторизуйте companion и выполните сопряжение TV.');
       }
       setDiagnostic('testing_screen', 'Screen Off/On', 'Выключение экрана…');
       screenOff(function (offErr) {
@@ -838,11 +655,14 @@
       });
     });
 
-    diagnosticButton('Забыть сопряжение', 'Удаляет только локальный client-key Lampa Sleep.', function () {
-      ssap.forget();
-      state.lastError = '';
-      setDiagnostic('idle', 'Pairing', 'Локальный pairing удалён');
-      notify('Lampa Sleep: локальный pairing удалён.');
+    diagnosticButton('Забыть сопряжение TV', 'Удаляет SSAP client-key только из companion service.', function () {
+      companionRequest('forgetTvPairing', {}, function (err) {
+        if (err) return notify('Lampa Sleep: ' + err.message);
+        state.tvPaired = false;
+        state.lastError = '';
+        setDiagnostic('idle', 'LG SSAP', 'TV pairing удалён');
+        notify('Lampa Sleep: TV pairing удалён.');
+      });
     });
   }
 
@@ -852,39 +672,26 @@
     version: VERSION,
     config: config,
     status: snapshot,
-    detectOwnTvIp: detectOwnTvIp,
     armMinutes: armMinutes,
     armEpisodes: armEpisodes,
     cancel: cancel,
-    pair: function (callback) {
-      if (!config.powerEnabled) {
-        var disabled = new Error('Сначала включите «Разрешить управление TV» в настройках.');
-        if (callback) callback(disabled);
-        else notify(disabled.message);
-        return;
-      }
-      ssap.connect(function (err) {
-        recordPowerError(err);
-        ssap.close();
-        if (err) notify('Lampa Sleep: pairing не выполнен: ' + err.message);
-        else notify('Lampa Sleep: TV связан. Power-команды доступны.');
-        refreshDiagnosticStatus();
-        if (callback) callback(err || null);
+    authorizeCompanion: authorizeCompanion,
+    refreshCompanionStatus: refreshCompanionStatus,
+    pair: pairTvViaCompanion,
+    forgetPairing: function (callback) {
+      companionRequest('forgetTvPairing', {}, function (err, result) {
+        if (!err) state.tvPaired = false;
+        if (callback) callback(err, result);
       });
-    },
-    forgetPairing: function () {
-      ssap.forget();
-      notify('Lampa Sleep: pairing удалён локально.');
     },
     getPowerState: getPowerState,
     screenOff: screenOff,
     screenOn: screenOn,
     powerOff: powerOff,
     _test: {
-      isSafeHost: isSafeHost,
-      manifest: function () { return ssap.manifest(); },
       onEnded: onEnded,
-      executeAction: executeAction
+      executeAction: executeAction,
+      companionRequest: companionRequest
     }
   };
 

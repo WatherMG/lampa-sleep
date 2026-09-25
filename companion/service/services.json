@@ -1,0 +1,9 @@
+{
+  "id": "io.github.wathermg.lampasleep.service",
+  "description": "Lampa Sleep Companion Service",
+  "services": [
+    {
+      "name": "io.github.wathermg.lampasleep.service"
+    }
+  ]
+}

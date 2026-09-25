@@ -1,13 +1,16 @@
 {
   "name": "lampa-sleep",
-  "version": "0.1.2-alpha.0",
+  "version": "0.2.0-alpha.0",
   "private": true,
   "description": "Safety-first sleep timer and LG webOS power controls for Lampa",
   "repository": "https://github.com/WatherMG/lampa-sleep",
   "scripts": {
-    "check": "node --check sleep.js && node --check test/sleep.test.js && node --check scripts/build.mjs && node --check scripts/verify-dist.mjs",
+    "check": "node --check sleep.js && node --check test/sleep.test.js && node --check test/companion.test.js && node --check companion/app/app.js && node --check companion/service/ssap.js && node --check companion/service/lampa_sleep_service.js && node --check scripts/build.mjs && node --check scripts/verify-dist.mjs && node --check scripts/prepare-companion.mjs && node --check scripts/package-companion.mjs && node --check scripts/verify-companion-package.mjs",
     "test": "node --test test/*.test.js",
-    "build": "node scripts/build.mjs && node scripts/verify-dist.mjs"
+    "build": "node scripts/build.mjs && node scripts/verify-dist.mjs",
+    "prepare:companion": "node scripts/prepare-companion.mjs",
+    "package:companion": "npm run prepare:companion && node scripts/package-companion.mjs",
+    "verify:companion": "node scripts/verify-companion-package.mjs"
   },
   "engines": {
     "node": ">=22"

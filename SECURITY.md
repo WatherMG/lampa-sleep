@@ -1,40 +1,42 @@
 # Security
 
-## Threat model
+## Current architecture
 
-Lampa Sleep controls playback and, when explicitly enabled, can request Screen Off or TV Off on an LG TV. A bug must not silently broaden that capability to arbitrary devices or private webOS services.
+Power integration is disabled by default. Playback-only timers use Lampa APIs and do not require TV-control access.
 
-## Controls
+Optional TV power control uses a separately installed **Lampa Sleep Companion** package:
 
-- Power integration defaults to **off**.
-- Network target validation allows only loopback/RFC1918 IPv4.
-- SSAP requires TV-side pairing and a client key.
-- The client key is stored directly in this app origin's `window.localStorage`, outside `Lampa.Storage`, and is never returned by `status()`.
-- Debug logging never prints the key.
-- The registration manifest is unsigned and asks only for power/screen-state permissions.
-- No root, SSH, Homebrew service, private Luna power call, alert/Luna trick, external HTTP proxy or cloud service is used.
-- Power failure has no fallback transport.
-- Playback is stopped before a power request.
-- Automatic-next blocking expires after 3 seconds to avoid blocking a later manual playback.
+- Lampa plugin -> local Luna IPC;
+- companion webOS JavaScript Service -> secure SSAP loopback on port 3001;
+- no root, SSH, cloud backend or external helper.
 
-## What is not yet proven
+## Boundaries
 
-- Whether LG webOS allows SSAP WebSocket loopback from Lampa to `127.0.0.1:3000`.
-- Whether every firmware accepts the intentionally minimal unsigned SSAP manifest.
-- Whether an installed Lampa build permits clear-text local `ws://` WebSockets to its own TV/LAN address.
-- Exact behavior of Screen Off on every LG panel/firmware.
-- LAN fallback uses unencrypted `ws://` on port 3000; loopback is preferable. Use a LAN IP only on a trusted local network.
+- The Lampa plugin no longer opens SSAP WebSockets itself.
+- The companion SSAP target is fixed to the same TV loopback address.
+- The service does not implement pointer, keyboard or ordinary remote-control input.
+- The LG pairing credential remains in companion service state and is not returned to the Lampa plugin.
+- Companion authorization is tied to the actual Luna caller identifier after the user enters the short-lived setup code.
+- Power operations are accepted only after explicit authorization.
+- Lampa playback is stopped before a timer-triggered power request.
+- There is no private TV-power Luna fallback and no browser Origin workaround.
+- TV Off is deliberately absent from the diagnostics buttons; reversible checks come first.
 
-These are compatibility questions and must be established with a physical-TV acceptance test.
+## TLS
 
-## Reporting
+LG secure SSAP uses a certificate that is not generally trusted by a normal Node CA store. The companion disables normal CA verification only for its fixed connection to the same TV at loopback port 3001. The plugin cannot supply another host.
 
-Do not publish:
+## Hardware validation still required
 
-- SSAP client keys;
-- local-storage dumps;
-- Wi-Fi credentials;
-- public IP addresses;
-- unrelated device identifiers.
+Automated tests cannot prove firmware-specific behavior. Validate on the physical TV in this order:
 
-A private LAN address alone is normally not secret, but redact it if logs will be posted publicly.
+1. install companion;
+2. authorize Lampa;
+3. pair with LG;
+4. read power state;
+5. Screen Off -> Screen On;
+6. TV Off only after the reversible test succeeds.
+
+## Sensitive data
+
+Do not publish companion service state, LG pairing credentials, Wi-Fi credentials, or unrelated device identifiers. For normal debugging, share the on-screen Lampa Sleep error/status only.
