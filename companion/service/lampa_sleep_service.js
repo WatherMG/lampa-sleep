@@ -122,7 +122,7 @@ function requireAuthorized(message, callback) {
   });
 }
 
-function runTvCommand(message, uri) {
+function runTvCommand(message, uri, payload, noWait) {
   requireAuthorized(message, function () {
     if (!state.tvClientKey) {
       respondError(message, 'TV_NOT_PAIRED', 'LG SSAP pairing has not been completed');
@@ -130,7 +130,9 @@ function runTvCommand(message, uri) {
     }
     ssap.run({
       clientKey: state.tvClientKey,
-      uri: uri
+      uri: uri,
+      payload: payload || {},
+      noWait: !!noWait
     }, function (err, result) {
       if (err) {
         respondError(message, 'SSAP_ERROR', err.message);
@@ -258,19 +260,19 @@ service.register('forgetTvPairing', function (message) {
 });
 
 service.register('getPowerState', function (message) {
-  runTvCommand(message, 'ssap://com.webos.service.tvpower/power/getPowerState');
+  runTvCommand(message, 'ssap://com.webos.service.tvpower/power/getPowerState', {});
 });
 
 service.register('screenOff', function (message) {
-  runTvCommand(message, 'ssap://com.webos.service.tvpower/power/turnOffScreen');
+  runTvCommand(message, 'ssap://com.webos.service.tvpower/power/turnOffScreen', { standbyMode: 'active' });
 });
 
 service.register('screenOn', function (message) {
-  runTvCommand(message, 'ssap://com.webos.service.tvpower/power/turnOnScreen');
+  runTvCommand(message, 'ssap://com.webos.service.tvpower/power/turnOnScreen', { standbyMode: 'active' });
 });
 
 service.register('powerOff', function (message) {
-  runTvCommand(message, 'ssap://system/turnOff');
+  runTvCommand(message, 'ssap://system/turnOff', {}, true);
 });
 
 console.log('[LampaSleepService] ' + VERSION + ' ready');
