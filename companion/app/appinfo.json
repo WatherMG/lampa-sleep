@@ -1,0 +1,10 @@
+{
+  "id": "io.github.wathermg.lampasleep",
+  "version": "0.2.0",
+  "vendor": "WatherMG",
+  "type": "web",
+  "main": "index.html",
+  "title": "Lampa Sleep Companion",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png"
+}
