@@ -12,7 +12,7 @@
     return;
   }
 
-  var VERSION = '0.1.1-alpha';
+  var VERSION = '0.1.2-alpha';
   var STORAGE_PREFIX = 'lampa_sleep_';
   var KEY_CLIENT = STORAGE_PREFIX + 'ssap_key';
   var KEY_HOST = STORAGE_PREFIX + 'ssap_host';
@@ -41,7 +41,7 @@
 
   var config = {
     powerEnabled: asBool(storageGet(KEY_POWER, false)),
-    host: storageGet(KEY_HOST, '127.0.0.1'),
+    host: storageGet(KEY_HOST, 'auto'),
     defaultAction: storageGet(KEY_ACTION, 'stop'),
     softTimer: asBool(storageGet(KEY_SOFT, true)),
     debug: asBool(storageGet(KEY_DEBUG, false))
@@ -63,6 +63,7 @@
     lastOperation: '',
     lastResult: 'Не проверялось',
     connectionStage: 'idle',
+    detectedHost: '',
     playerActive: false
   };
 
@@ -107,7 +108,7 @@
   function isSafeHost(host) {
     if (typeof host !== 'string') return false;
     host = host.trim().toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return true;
+    if (host === 'auto' || host === 'localhost' || host === '127.0.0.1') return true;
     var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
     if (!m) return false;
     var a = m.slice(1).map(Number);
@@ -116,6 +117,75 @@
       (a[0] === 172 && a[1] >= 16 && a[1] <= 31) ||
       (a[0] === 192 && a[1] === 168) ||
       a[0] === 127;
+  }
+
+
+  function extractConnectedIp(status) {
+    if (!status || typeof status !== 'object') return '';
+    var candidates = [status.wifi, status.wired];
+    for (var i = 0; i < candidates.length; i++) {
+      var item = candidates[i];
+      if (!item || item.state !== 'connected' || !item.ipAddress) continue;
+      var ip = String(item.ipAddress).trim();
+      if (isSafeHost(ip) && ip !== '127.0.0.1') return ip;
+    }
+    return '';
+  }
+
+  function detectOwnTvIp(callback) {
+    callback = typeof callback === 'function' ? callback : function () {};
+    if (!window.webOS || !window.webOS.service || typeof window.webOS.service.request !== 'function') {
+      callback(new Error('Публичный webOS Connection Manager недоступен'));
+      return;
+    }
+
+    setDiagnostic('detecting_ip', 'Network', 'Определение адреса TV…');
+    try {
+      window.webOS.service.request('luna://com.palm.connectionmanager', {
+        method: 'getStatus',
+        parameters: { subscribe: false },
+        onSuccess: function (response) {
+          var ip = extractConnectedIp(response);
+          if (!ip) {
+            setDiagnostic('error', 'Network', 'Не найден приватный IP активного интерфейса');
+            callback(new Error('Не удалось определить приватный IP телевизора'));
+            return;
+          }
+          state.detectedHost = ip;
+          setDiagnostic('idle', 'Network', 'Адрес TV: ' + ip);
+          callback(null, ip);
+        },
+        onFailure: function (error) {
+          var message = error && (error.errorText || error.message) || 'Connection Manager error';
+          setDiagnostic('error', 'Network', message);
+          callback(new Error(message));
+        }
+      });
+    } catch (e) {
+      setDiagnostic('error', 'Network', String(e.message || e));
+      callback(e);
+    }
+  }
+
+  function resolveSsAPHost(callback) {
+    var configured = String(config.host || 'auto').trim().toLowerCase();
+    if (configured !== 'auto' && configured !== 'localhost' && configured !== '127.0.0.1') {
+      if (!isSafeHost(configured)) return callback(new Error('Некорректный адрес TV'));
+      state.detectedHost = configured;
+      callback(null, configured);
+      return;
+    }
+
+    detectOwnTvIp(function (err, ip) {
+      if (!err && ip) return callback(null, ip);
+      if (configured === 'localhost' || configured === '127.0.0.1') {
+        state.detectedHost = configured;
+        setDiagnostic('idle', 'Network', 'Используется loopback ' + configured);
+        callback(null, configured);
+        return;
+      }
+      callback(err || new Error('Адрес TV не определён'));
+    });
   }
 
   function clearTimer() {
@@ -209,97 +279,123 @@
 
   SSAPClient.prototype.connect = function (callback) {
     var self = this;
-    var host = String(config.host || '').trim();
-    if (!isSafeHost(host)) {
-      callback(new Error('Разрешены только localhost и приватные LAN IPv4-адреса'));
-      return;
-    }
-    if (typeof window.WebSocket !== 'function') {
-      callback(new Error('WebSocket API недоступен'));
-      return;
-    }
+    callback = typeof callback === 'function' ? callback : function () {};
 
-    self.close();
-    setDiagnostic('connecting', 'SSAP', 'Подключение к ' + host + ':3000');
-    var done = false;
-    function finish(err) {
-      if (done) return;
-      done = true;
-      if (self.timer) clearTimeout(self.timer);
-      self.timer = null;
-      if (err) setDiagnostic('error', 'SSAP', String(err.message || err));
-      callback(err || null);
-    }
+    resolveSsAPHost(function (resolveError, host) {
+      if (resolveError) {
+        callback(resolveError);
+        return;
+      }
+      if (!isSafeHost(host) || host === 'auto') {
+        callback(new Error('Разрешены только localhost и приватные LAN IPv4-адреса'));
+        return;
+      }
+      if (typeof window.WebSocket !== 'function') {
+        callback(new Error('WebSocket API недоступен'));
+        return;
+      }
 
-    var url = 'ws://' + host + ':3000';
-    var ws;
-    try {
-      ws = new window.WebSocket(url);
-    } catch (e) {
-      finish(e);
-      return;
-    }
-    self.ws = ws;
-    self.timer = setTimeout(function () {
-      finish(new Error('SSAP connection timeout'));
       self.close();
-    }, 30000);
+      setDiagnostic('connecting', 'SSAP', 'Подключение к ' + host + ':3000');
+      var done = false;
+      var socketOpened = false;
 
-    ws.onopen = function () {
-      self.connected = true;
-      setDiagnostic('registering', 'Pairing', self.clientKey() ? 'Проверка сохранённого pairing' : 'Ожидание подтверждения на TV');
-      var payload = {
-        forcePairing: false,
-        pairingType: 'PROMPT',
-        manifest: self.manifest()
+      function armTimeout(ms, message) {
+        if (self.timer) clearTimeout(self.timer);
+        self.timer = setTimeout(function () {
+          finish(new Error(message));
+          self.close();
+        }, ms);
+      }
+
+      function finish(err) {
+        if (done) return;
+        done = true;
+        if (self.timer) clearTimeout(self.timer);
+        self.timer = null;
+        if (err) setDiagnostic('error', 'SSAP', String(err.message || err));
+        callback(err || null);
+      }
+
+      var url = 'ws://' + host + ':3000';
+      var ws;
+      try {
+        ws = new window.WebSocket(url);
+      } catch (e) {
+        finish(e);
+        return;
+      }
+      self.ws = ws;
+      armTimeout(5000, 'Не удалось открыть SSAP WebSocket к ' + host + ':3000');
+
+      ws.onopen = function () {
+        socketOpened = true;
+        self.connected = true;
+        setDiagnostic('socket_open', 'SSAP', 'WebSocket открыт: ' + host + ':3000');
+        armTimeout(30000, 'WebSocket открыт, но TV не завершил SSAP pairing за 30 секунд');
+
+        var payload = {
+          forcePairing: false,
+          pairingType: 'PROMPT',
+          manifest: self.manifest()
+        };
+        var key = self.clientKey();
+        if (key) payload['client-key'] = key;
+        setDiagnostic('registering', 'Pairing', key ? 'Проверка сохранённого pairing' : 'Регистрация отправлена; ожидается запрос LG');
+        ws.send(JSON.stringify({ type: 'register', id: 'register_0', payload: payload }));
       };
-      var key = self.clientKey();
-      if (key) payload['client-key'] = key;
-      ws.send(JSON.stringify({ type: 'register', id: 'register_0', payload: payload }));
-    };
 
-    ws.onmessage = function (event) {
-      var msg;
-      try { msg = JSON.parse(event.data); } catch (e) { return; }
-      if (!msg || typeof msg !== 'object') return;
+      ws.onmessage = function (event) {
+        var msg;
+        try { msg = JSON.parse(event.data); } catch (e) { return; }
+        if (!msg || typeof msg !== 'object') return;
 
-      if (msg.type === 'registered' && msg.id === 'register_0') {
-        var newKey = msg.payload && msg.payload['client-key'];
-        if (typeof newKey === 'string' && newKey.length >= 8) self.saveClientKey(newKey);
-        self.registered = true;
-        setDiagnostic('paired', 'Pairing', 'TV связан');
-        finish(null);
-        return;
-      }
+        if (msg.type === 'registered' && (!msg.id || msg.id === 'register_0')) {
+          var newKey = msg.payload && msg.payload['client-key'];
+          if (typeof newKey === 'string' && newKey.length >= 8) self.saveClientKey(newKey);
+          self.registered = true;
+          setDiagnostic('paired', 'Pairing', 'TV связан через ' + host);
+          finish(null);
+          return;
+        }
 
-      if ((msg.type === 'pairing' || msg.type === 'response') && msg.id === 'register_0' &&
-          msg.payload && msg.payload.pairingType === 'PROMPT') {
-        setDiagnostic('waiting_approval', 'Pairing', 'Подтвердите запрос на экране TV');
-        return;
-      }
+        if ((msg.type === 'pairing' || msg.type === 'response') &&
+            (!msg.id || msg.id === 'register_0') &&
+            msg.payload && msg.payload.pairingType === 'PROMPT') {
+          setDiagnostic('waiting_approval', 'Pairing', 'Подтвердите системный запрос LG на экране TV');
+          return;
+        }
 
-      if (msg.type === 'error' && msg.id === 'register_0') {
-        finish(new Error((msg.error || (msg.payload && msg.payload.errorText) || 'SSAP registration failed') + ''));
-        return;
-      }
+        if (msg.type === 'error' && (!msg.id || msg.id === 'register_0')) {
+          finish(new Error((msg.error || (msg.payload && msg.payload.errorText) || 'SSAP registration failed') + ''));
+          return;
+        }
 
-      if ((msg.type === 'response' || msg.type === 'error') && msg.id && self.pending[msg.id]) {
-        var cb = self.pending[msg.id];
-        delete self.pending[msg.id];
-        var requestError = msg.type === 'error' ? new Error(msg.error || 'SSAP request failed') : null;
-        self.close();
-        cb(requestError, msg.payload || {});
-      }
-    };
+        if ((msg.type === 'response' || msg.type === 'error') && msg.id && self.pending[msg.id]) {
+          var cb = self.pending[msg.id];
+          delete self.pending[msg.id];
+          var requestError = msg.type === 'error' ? new Error(msg.error || 'SSAP request failed') : null;
+          self.close();
+          cb(requestError, msg.payload || {});
+        }
+      };
 
-    ws.onerror = function () {
-      finish(new Error('SSAP WebSocket connection failed'));
-    };
+      ws.onerror = function () {
+        finish(new Error(socketOpened ?
+          'SSAP WebSocket error после открытия соединения' :
+          'SSAP WebSocket не открылся. Возможна блокировка Origin/mixed-content или порт 3000 недоступен'));
+      };
 
-    ws.onclose = function () {
-      self.connected = false;
-      self.registered = false;
-    };
+      ws.onclose = function () {
+        self.connected = false;
+        self.registered = false;
+        if (!done) {
+          finish(new Error(socketOpened ?
+            'SSAP WebSocket закрыт до завершения регистрации' :
+            'SSAP WebSocket отклонён до открытия соединения'));
+        }
+      };
+    });
   };
 
   SSAPClient.prototype.request = function (uri, payload, callback) {
@@ -497,6 +593,7 @@
       powerEnabled: config.powerEnabled,
       paired: !!ssap.clientKey(),
       host: config.host,
+      detectedHost: state.detectedHost,
       lastPowerState: state.lastPowerState,
       lastOperation: state.lastOperation,
       lastResult: state.lastResult,
@@ -630,12 +727,12 @@
       'Разрешить управление TV', 'По умолчанию выключено. Используется только локальный SSAP с подтверждением на экране TV.',
       function (value) { config.powerEnabled = asBool(value); });
 
-    param(KEY_HOST, 'input', '127.0.0.1', null,
-      'Адрес этого LG TV', 'Сначала попробуйте 127.0.0.1. Разрешены только loopback и приватные LAN IPv4.',
+    param(KEY_HOST, 'input', 'auto', null,
+      'Адрес LG TV', 'Рекомендуется auto: IP определяется через официальный webOS Connection Manager. Также разрешены loopback и приватные LAN IPv4.',
       function (value) {
         if (!isSafeHost(value)) {
           storageSet(KEY_HOST, config.host);
-          return notify('Lampa Sleep: разрешён только localhost/приватный IPv4.');
+          return notify('Lampa Sleep: используйте auto, localhost или приватный IPv4.');
         }
         config.host = String(value).trim();
       });
@@ -648,6 +745,13 @@
       component: component,
       param: { type: 'title' },
       field: { name: 'Диагностика и сопряжение' }
+    });
+
+    diagnosticButton('Определить адрес TV', 'Использует официальный LG webOS Connection Manager и ничего не меняет в сети.', function () {
+      detectOwnTvIp(function (err, ip) {
+        if (err) notify('Lampa Sleep: IP не определён: ' + err.message);
+        else notify('Lampa Sleep: адрес этого TV — ' + ip);
+      });
     });
 
     Lampa.SettingsApi.addParam({
@@ -748,6 +852,7 @@
     version: VERSION,
     config: config,
     status: snapshot,
+    detectOwnTvIp: detectOwnTvIp,
     armMinutes: armMinutes,
     armEpisodes: armEpisodes,
     cancel: cancel,
