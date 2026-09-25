@@ -16,5 +16,6 @@ writeFileSync(join(dist, 'index.html'), [
   '</head><body><h1>Lampa Sleep</h1>',
   '<p>Safety-first sleep timer for Lampa. Power integration is disabled by default and requires explicit LG TV pairing.</p>',
   '<p>Plugin: <a href="sleep.js"><code>sleep.js</code></a></p>',
+  '<p>LG webOS companion: <a href="lampa-sleep-companion.ipk"><code>lampa-sleep-companion.ipk</code></a></p>',
   '</body></html>'
 ].join('\n') + '\n');
