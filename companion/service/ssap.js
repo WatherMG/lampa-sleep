@@ -289,31 +289,6 @@ function run(options, callback) {
   client.onJson = function (msg) {
     if (!msg || typeof msg !== 'object') return;
 
-    if (phase === 'hello') {
-      if (msg.type !== 'hello') return;
-      phase = 'system';
-      arm(5000, 'SSAP pre-registration system info timeout');
-      client.sendJson({
-        id: 'get_sys_info',
-        type: 'request',
-        uri: 'ssap://system/getSystemInfo',
-        payload: {}
-      });
-      return;
-    }
-
-    if (phase === 'system') {
-      if (msg.id !== 'get_sys_info') return;
-      phase = 'register';
-      arm(options.pairTimeout || 30000, 'SSAP pairing timeout');
-      client.sendJson({
-        type: 'register',
-        id: 'register_0',
-        payload: registrationPayload(options.clientKey)
-      });
-      return;
-    }
-
     if (phase === 'register') {
       if (msg.type === 'response' && msg.payload && msg.payload.pairingType === 'PROMPT') {
         if (options.onStage) options.onStage('waiting_approval');
@@ -345,13 +320,24 @@ function run(options, callback) {
       }
 
       phase = 'request';
-      arm(options.requestTimeout || 8000, 'SSAP request timeout');
       client.sendJson({
         id: 'command_1',
         type: 'request',
         uri: options.uri,
         payload: options.payload || {}
       });
+
+      if (options.noWait) {
+        phase = 'done';
+        if (timer) clearTimeout(timer);
+        setTimeout(function () {
+          client.close();
+          callback(null, { clientKey: registeredKey, payload: { accepted: true } });
+        }, 150);
+        return;
+      }
+
+      arm(options.requestTimeout || 8000, 'SSAP request timeout');
       return;
     }
 
@@ -375,10 +361,15 @@ function run(options, callback) {
       fail(err);
       return;
     }
-    phase = 'hello';
-    arm(5000, 'SSAP hello timeout');
+
+    phase = 'register';
+    arm(options.pairTimeout || 30000, 'SSAP pairing timeout');
     if (options.onStage) options.onStage('wss_open');
-    client.sendJson({ id: 'hello', type: 'hello', payload: {} });
+    client.sendJson({
+      type: 'register',
+      id: 'register_0',
+      payload: registrationPayload(options.clientKey)
+    });
   });
 }
 
