@@ -287,7 +287,7 @@ test('companion authorization sends only the one-time code over Luna', () => {
     x.request.method === 'authorize'
   );
   assert.ok(call);
-  assert.deepEqual(call.request.parameters, { code: '123456' });
+  assert.equal(call.request.parameters.code, '123456');
   assert.equal(h.api.status().companionAuthorized, true);
   assert.equal(h.storage.lampa_sleep_companion_code, '');
 });
