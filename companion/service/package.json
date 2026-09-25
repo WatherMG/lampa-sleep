@@ -1,0 +1,7 @@
+{
+  "name": "io.github.wathermg.lampasleep.service",
+  "version": "0.2.0",
+  "description": "Lampa Sleep companion service",
+  "main": "lampa_sleep_service.js",
+  "license": "MIT"
+}
