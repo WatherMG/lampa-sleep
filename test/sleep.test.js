@@ -282,51 +282,44 @@ test('power calls fail closed while power integration is disabled', () => {
   assert.equal(h.sockets.length, 0);
 });
 
-test('pairing uses PROMPT, stores the client key locally and never logs it', () => {
-  const h = harness();
-  h.api.config.powerEnabled = true;
-  let pairError = 'pending';
-  h.api.pair(err => { pairError = err; });
-  assert.equal(h.sockets.length, 1);
-  const ws = h.sockets[0];
-  assert.equal(ws.url, 'ws://192.168.1.50:3000');
-  ws.open();
-  assert.equal(ws.sent[0].type, 'register');
-  assert.equal(ws.sent[0].payload.pairingType, 'PROMPT');
-  assert.equal(ws.sent[0].payload['client-key'], undefined);
 
-  const secret = 'secret-client-key-123';
-  ws.message({ type: 'registered', id: 'register_0', payload: { 'client-key': secret } });
-  assert.equal(pairError, null);
-  assert.equal(h.localStorageData.lampa_sleep_ssap_key, secret);
-  assert.equal(Object.hasOwn(h.storage, 'lampa_sleep_ssap_key'), false);
-  assert.equal(JSON.stringify(h.logs).includes(secret), false);
+test('companion authorization sends only the one-time code over Luna', () => {
+  const h = harness({ storage: { lampa_sleep_companion_code: '123456' } });
+  let error = 'pending';
+  h.api.authorizeCompanion(err => { error = err; });
+  assert.equal(error, null);
+  const call = h.serviceRequests.find(x =>
+    x.uri === 'luna://io.github.wathermg.lampasleep.service' &&
+    x.request.method === 'authorize'
+  );
+  assert.ok(call);
+  assert.deepEqual(call.request.parameters, { code: '123456' });
+  assert.equal(h.api.status().companionAuthorized, true);
+  assert.equal(h.storage.lampa_sleep_companion_code, '');
 });
 
-test('screen off sends only the documented SSAP power request after pairing', () => {
-  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+
+test('screen off is delegated only to the local companion service', () => {
+  const h = harness();
   h.api.config.powerEnabled = true;
   let result = 'pending';
   h.api.screenOff(err => { result = err; });
-  const ws = h.sockets[0];
-  ws.open();
-  assert.equal(ws.sent[0].payload['client-key'], 'paired-key-123');
-  ws.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
-  assert.equal(ws.sent[1].uri, 'ssap://com.webos.service.tvpower/power/turnOffScreen');
-  assert.deepEqual(ws.sent[1].payload, {});
-  ws.message({ type: 'response', id: ws.sent[1].id, payload: { returnValue: true } });
   assert.equal(result, null);
+  const calls = h.serviceRequests.filter(x => x.uri === 'luna://io.github.wathermg.lampasleep.service');
+  assert.equal(calls.at(-1).request.method, 'screenOff');
+  assert.equal(h.sockets.length, 0);
 });
 
-test('TV off uses ssap system/turnOff and no Luna fallback', () => {
-  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+
+test('TV off is delegated to companion and browser SSAP is not opened', () => {
+  const h = harness();
   h.api.config.powerEnabled = true;
-  h.api.powerOff(() => {});
-  const ws = h.sockets[0];
-  ws.open();
-  ws.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
-  assert.equal(ws.sent[1].uri, 'ssap://system/turnOff');
-  assert.equal(plugin.includes('luna://com.webos.service.tvpower'), false);
+  let result = 'pending';
+  h.api.powerOff(err => { result = err; });
+  assert.equal(result, null);
+  const calls = h.serviceRequests.filter(x => x.uri === 'luna://io.github.wathermg.lampasleep.service');
+  assert.equal(calls.at(-1).request.method, 'powerOff');
+  assert.equal(h.sockets.length, 0);
 });
 
 test('hard minute timer pauses and closes the Lampa player without power access', () => {
@@ -380,51 +373,58 @@ test('diagnostic settings expose pairing and safe screen checks without TV off b
   assert.equal(buttons.some(name => /выключить телевизор/i.test(name)), false);
 });
 
-test('pairing allows 30 seconds for on-TV approval after socket opens', () => {
+
+test('TV pairing is delegated to companion service', () => {
   const h = harness();
   h.api.config.powerEnabled = true;
-  h.api.pair(() => {});
-  assert.ok([...h.timers.values()].some(x => x.delay === 5000));
-  h.sockets[0].open();
-  assert.ok([...h.timers.values()].some(x => x.delay === 30000));
+  let error = 'pending';
+  h.api.pair(err => { error = err; });
+  assert.equal(error, null);
+  const call = h.serviceRequests.find(x =>
+    x.uri === 'luna://io.github.wathermg.lampasleep.service' &&
+    x.request.method === 'pairTv'
+  );
+  assert.ok(call);
+  assert.equal(h.api.status().paired, true);
+  assert.equal(h.sockets.length, 0);
 });
 
-test('successful diagnostic request closes SSAP connection immediately', () => {
-  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+
+test('power-state diagnostic uses companion and stores returned state', () => {
+  const h = harness();
   h.api.config.powerEnabled = true;
-  let done = false;
-  h.api.getPowerState((err) => {
+  let payload;
+  h.api.getPowerState((err, result) => {
     assert.equal(err, null);
-    done = true;
+    payload = result;
   });
-  const ws = h.sockets[0];
-  ws.open();
-  ws.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
-  const request = ws.sent[1];
-  ws.message({ type: 'response', id: request.id, payload: { state: 'Active' } });
-  assert.equal(done, true);
-  assert.equal(ws.readyState, 3);
+  assert.equal(payload.state, 'Active');
+  assert.equal(h.api.status().lastPowerState, 'Active');
+  assert.equal(h.sockets.length, 0);
 });
 
-test('screen diagnostic performs screen off then screen on, never TV off', () => {
-  const h = harness({ localStorage: { lampa_sleep_ssap_key: 'paired-key-123' } });
+
+test('screen diagnostic performs companion screenOff then screenOn and never powerOff', () => {
+  const h = harness();
   h.api.config.powerEnabled = true;
+  h.api.refreshCompanionStatus(() => {});
   const btn = h.settings.find(x => x.param.type === 'button' && x.field.name === 'Тест Screen Off → On');
   assert.ok(btn);
   btn.onChange();
 
-  const first = h.sockets[0];
-  first.open();
-  first.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
-  assert.equal(first.sent[1].uri, 'ssap://com.webos.service.tvpower/power/turnOffScreen');
-  first.message({ type: 'response', id: first.sent[1].id, payload: { returnValue: true } });
+  const calls1 = h.serviceRequests
+    .filter(x => x.uri === 'luna://io.github.wathermg.lampasleep.service')
+    .map(x => x.request.method);
+  assert.ok(calls1.includes('screenOff'));
 
   h.fireTimer(3000);
-  const second = h.sockets[1];
-  second.open();
-  second.message({ type: 'registered', id: 'register_0', payload: { 'client-key': 'paired-key-123' } });
-  assert.equal(second.sent[1].uri, 'ssap://com.webos.service.tvpower/power/turnOnScreen');
-  assert.equal([first, second].some(ws => ws.sent.some(msg => msg.uri === 'ssap://system/turnOff')), false);
+
+  const methods = h.serviceRequests
+    .filter(x => x.uri === 'luna://io.github.wathermg.lampasleep.service')
+    .map(x => x.request.method);
+  assert.ok(methods.includes('screenOn'));
+  assert.equal(methods.includes('powerOff'), false);
+  assert.equal(h.sockets.length, 0);
 });
 
 test('diagnostic status never exposes the SSAP client key', () => {
@@ -466,30 +466,33 @@ test('auto detection rejects a public interface address', () => {
   assert.match(error.message, /приватный IP/);
 });
 
-test('pairing separates socket-open timeout from TV approval timeout', () => {
-  const h = harness();
+
+test('companion failures are surfaced without browser WebSocket fallback', () => {
+  const h = harness({
+    companionResponses: {
+      pairTv: { returnValue: false, errorText: 'WSS loopback failed' }
+    }
+  });
   h.api.config.powerEnabled = true;
   let error;
   h.api.pair(err => { error = err; });
-  assert.equal(h.sockets[0].url, 'ws://192.168.1.50:3000');
-  assert.ok([...h.timers.values()].some(x => x.delay === 5000));
-  h.fireTimer(5000);
-  assert.match(error.message, /WebSocket/);
-
-  const h2 = harness();
-  h2.api.config.powerEnabled = true;
-  let error2;
-  h2.api.pair(err => { error2 = err; });
-  h2.sockets[0].open();
-  assert.ok([...h2.timers.values()].some(x => x.delay === 30000));
-  h2.fireTimer(30000);
-  assert.match(error2.message, /pairing/);
+  assert.match(error.message, /WSS loopback failed/);
+  assert.equal(h.sockets.length, 0);
 });
 
-test('manual private host bypasses network detection', () => {
-  const h = harness({ storage: { lampa_sleep_ssap_host: '192.168.10.9' } });
-  h.api.config.powerEnabled = true;
-  h.api.pair(() => {});
-  assert.equal(h.serviceRequests.length, 0);
-  assert.equal(h.sockets[0].url, 'ws://192.168.10.9:3000');
+
+test('companion status reports authorization and TV pairing', () => {
+  const h = harness();
+  let result;
+  h.api.refreshCompanionStatus((err, status) => {
+    assert.equal(err, null);
+    result = status;
+  });
+  assert.equal(result.callerAuthorized, true);
+  assert.equal(result.tvPaired, true);
+  const status = h.api.status();
+  assert.equal(status.companionAvailable, true);
+  assert.equal(status.companionAuthorized, true);
+  assert.equal(status.tvPaired, true);
 });
+
