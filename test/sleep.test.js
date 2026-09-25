@@ -243,11 +243,11 @@ function harness(options = {}) {
   };
 }
 
-test('registers a separate settings component and safe text host input', () => {
+test('registers a separate settings component and safe companion code input', () => {
   const h = harness();
   assert.equal(h.api.version, '0.2.0-alpha');
   assert.equal(h.components[0].component, 'lampa_sleep');
-  const input = h.settings.find(x => x.param.name === 'lampa_sleep_ssap_host');
+  const input = h.settings.find(x => x.param.name === 'lampa_sleep_companion_code');
   assert.ok(input);
   assert.equal(input.param.type, 'input');
   assert.equal(input.param.values, 'string');
@@ -369,7 +369,7 @@ test('diagnostic settings expose pairing and safe screen checks without TV off b
   assert.ok(buttons.includes('Проверить состояние TV'));
   assert.ok(buttons.includes('Тест Screen Off → On'));
   assert.ok(buttons.includes('Включить экран'));
-  assert.ok(buttons.includes('Забыть сопряжение'));
+  assert.ok(buttons.includes('Забыть сопряжение TV'));
   assert.equal(buttons.some(name => /выключить телевизор/i.test(name)), false);
 });
 
