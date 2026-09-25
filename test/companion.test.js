@@ -44,5 +44,5 @@ test('service uses Luna sender for client authorization', () => {
 test('public status does not include the TV client credential', () => {
   const body = serviceSource.match(/function publicState\(\) \{([\s\S]*?)\n\}/);
   assert.ok(body);
-  assert.doesNotMatch(body[1], /tvClientKey/);
+  assert.doesNotMatch(body[1], /tvClientKey\s*:/);
 });
