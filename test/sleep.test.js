@@ -428,7 +428,7 @@ test('plugin status exposes readiness without credentials', () => {
   const status = h.api.status();
   assert.equal(status.companionAvailable, true);
   assert.equal(status.companionAuthorized, true);
-  assert.equal(status.tvPaired, true);
+  assert.equal(status.paired, true);
   assert.equal(Object.hasOwn(status, 'clientKey'), false);
 });
 
@@ -474,6 +474,6 @@ test('companion status reports authorization and TV pairing', () => {
   const status = h.api.status();
   assert.equal(status.companionAvailable, true);
   assert.equal(status.companionAuthorized, true);
-  assert.equal(status.tvPaired, true);
+  assert.equal(status.paired, true);
 });
 
