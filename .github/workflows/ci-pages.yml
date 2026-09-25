@@ -21,13 +21,19 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Validate JavaScript
         run: npm run check
       - name: Run tests
         run: npm test
       - name: Build static artifact
         run: npm run build
+      - name: Install official webOS CLI
+        run: npm install -g @webos-tools/cli@3.2.6
+      - name: Package companion IPK
+        run: |
+          npm run package:companion
+          npm run verify:companion
 
   deploy:
     name: Publish GitHub Pages
@@ -51,8 +57,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '22'
+          node-version: '24'
       - run: node scripts/build.mjs
+      - name: Install official webOS CLI
+        run: npm install -g @webos-tools/cli@3.2.6
+      - name: Package companion IPK
+        run: |
+          npm run package:companion
+          npm run verify:companion
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
         with:
